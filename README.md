@@ -1,267 +1,162 @@
-# Vietnamese Voice Mic
+<p align="center"><img src="assets/voinoi.png" width="160" alt="VoiNoi"></p>
 
-Ung dung Windows chay nen de nhap tieng Viet bang giong noi vao o chat/input.
+# VoiNoi (Voi Nói)
 
-## Tinh nang chinh
+Ứng dụng Windows chạy nền: nói tiếng Việt thành chữ, dán đúng vào ô anh đang chọn. Kèm Trợ lý đọc (đọc to tài liệu)
+và chế độ trò chuyện bằng giọng nói với trợ lý AI.
 
-- Kich hoat bang `Alt + click chuot trai` vao dung o muon nhap.
-- Khoa cua so va vi tri ban dau, sau khi nhan dien se dan lai dung vi tri do.
-- Nhan dien tieng Viet bang Google Speech Recognition, co confidence trong log/HUD khi Google tra ve.
-- VAD bang WebRTC/RMS de biet khi nao dang noi va khi nao da ngung.
-- Toi uu cho doan noi dai: cat chunk tai vung am luong thap, gui chunk song song, ghep bo trung lap.
-- HUD/vong tron hien trang thai: dang nghe, dang nhan dien, da co text.
-- Bao ve dan nham: neu cua so target da dong thi bo qua dan.
-- Recovery: transcript moi nhat duoc giu tren clipboard, luu vao `voice-last.txt`,
-  lich su luu vao `voice-transcripts.jsonl`, audio gan nhat luu vao `voice-last.wav`.
-- Co the build ban Windows `.exe`, tao zip release va manifest update.
-- Auto-update doc manifest tu GitHub Release latest.
-- Du lieu ca nhan/context hoc rieng luu local va khong dua len GitHub.
+Tên cũ: Vietnamese Voice Mic. Từ bản 2.0.0 đổi tên thành VoiNoi.
 
-## Cach dung nhanh
+## Có gì mới ở 2.0.0 (nhanh hơn, hết treo)
 
-1. Chay `Start Vietnamese Voice Mic.cmd`.
-2. Giu `Alt` va click chuot trai vao o chat/input muon nhap.
-3. Khi vong tron hien `DANG NGHE`, noi noi dung can nhap.
-4. Khi ban ngung noi, app doi sang `DANG NHAN DIEN`.
-5. Khi co ket qua, app hien preview va tu dan vao dung vi tri da `Alt + click`.
-6. Sau khi app nhan dien, ban co the bam `Ctrl+V` de dan lai transcript moi nhat neu can.
-7. Khi dang nghe, bam `Esc` de dung va xu ly phan audio da thu.
+Đo trên máy thật, từ log của app:
 
-## Cuu lai noi dung vua noi
+| Việc | Trước | Bây giờ |
+| --- | --- | --- |
+| Chọn "Gõ chữ" trên vòng tròn tới lúc mic nghe | 1 giây, có lúc 11 đến 16 giây (treo cả giao diện) | 0,26 giây |
+| Mở micro mỗi lần nói | khoảng 1 giây | 0,03 giây |
+| Nhận diện xong tới lúc chữ được dán | chờ thêm khoảng 3 giây | dán ngay |
+| Chọn "Nói" tới lúc trợ lý nghe | 11 giây trở lên | khoảng 2,7 giây |
+| Đoạn dài 36 giây có một đoạn cuối chỉ là tiếng ồn | 24,8 giây | 2,7 giây (11 giây nếu phải nhờ Whisper nghe lại chỗ Google làm rơi chữ) |
+| Tiếng động (click chuột, gõ phím) bị tưởng là lời nói | chờ Whisper 9 giây rồi báo lỗi | báo ngay sau 0,6 giây |
 
-Neu app cat cau, dan loi, hoac ban doi cua so lam target khong con dung:
+Nguyên nhân đã sửa:
 
-- Bam `Ctrl+V` de dan lai transcript moi nhat vi app giu no tren clipboard.
-- Mo `voice-last.txt` de xem transcript moi nhat.
-- Mo `voice-transcripts.jsonl` de xem lich su cac lan nhan dien.
-- File `voice-last.wav` giu audio gan nhat, huu ich khi can kiem tra lai am thanh da thu.
+- Dò ô nhập bằng UI Automation chạy trên luồng giao diện. Với Chrome và terminal, mỗi lần dò mất 2 đến 5 giây nên vòng tròn,
+  HUD và phím tắt đứng hình. Khi chọn "Gõ chữ" trên vòng tròn, app còn dò trúng chính vòng tròn nên có lúc bỏ qua luôn.
+  Giờ chọn "Gõ chữ" là nghe ngay, còn việc dò (khi tắt vòng tròn) chạy ở luồng phụ.
+- Mỗi lần nói app khởi tạo lại PortAudio 3 đến 4 lần. Giờ giữ sẵn một bản dùng chung, cắm rút mic vẫn tự nhận lại.
+- Hàm học từ vựng đọc lại file cấu hình gần 3.000 lần cho mỗi câu, chạy trước khi dán. Giờ có cache và chạy sau khi dán.
+- Google không nghe ra một đoạn thì app thử lại tuần tự tới 14 lần. Giờ gửi lại và chia đôi song song, Whisper cứu đoạn
+  hỏng ngay trong lúc các đoạn khác đang chạy.
+- Đoạn chỉ có tiếng ồn bị tính là lỗi 0%, kéo độ tin cậy xuống dưới 82% và bắt Whisper nghe lại cả bài. Giờ đoạn ồn không
+  tính là mất chữ.
+- Whisper hay bịa câu kiểu "Hãy subscribe cho kênh..." khi gặp tiếng ồn. Giờ lọc bỏ trên kết quả của Whisper.
+- Đoạn nào Google trả về quá ít chữ so với độ dài (thường rơi mất câu đầu), app cho Whisper nghe riêng đoạn đó và lấy bản
+  đầy đủ hơn. Chỉnh ngưỡng bằng `low_coverage_wpm` (mặc định 92, đặt 0 để tắt).
+- Chế độ "Nói": bộ não AI được dò sẵn ở nền và nhớ 10 phút, câu chào ngắn lại và được tạo giọng sẵn.
 
-Nhung file recovery nay nam tren may cua ban va da duoc dua vao `.gitignore`, khong day len GitHub.
+## Cách dùng nhanh
 
-## Cau hinh mic
+1. Chạy `Start VoiNoi.cmd` (bản nguồn) hoặc `VoiNoi.exe` (bản đóng gói).
+2. Giữ `Alt` và click chuột trái vào ô chat hoặc ô nhập muốn gõ. Vòng tròn hiện ra:
+   trên = Gõ chữ, trái = Đọc, phải = Nói, dưới = Hủy.
+3. Chọn "Gõ chữ", nói nội dung. Ngừng nói thì app tự nhận diện và dán vào đúng chỗ vừa `Alt + click`.
+4. Đang nghe mà muốn dừng sớm: bấm `Esc`, phần đã nói vẫn được nhận diện.
+5. Dán lỗi hoặc đổi cửa sổ: bấm `Ctrl+V` để dán lại, chữ mới nhất luôn nằm trên clipboard.
 
-File cau hinh:
+Tạo shortcut có icon VoiNoi trên Desktop và Start Menu:
 
-```text
-voice-mic-settings.json
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-shortcut.ps1
 ```
 
-Vi du:
+## Vòng tròn chọn chế độ
+
+- Gõ chữ: nói thành chữ vào ô đã chọn.
+- Đọc: bôi đen hoặc `Ctrl+C` đoạn cần nghe trước, trợ lý đọc to đoạn đó. Chưa copy gì thì mở cửa sổ Trợ lý đọc.
+- Nói: trò chuyện với trợ lý AI bằng giọng nói.
+- Hủy: `Esc`, click ra ngoài, hoặc để yên 10 giây.
+- Tắt vòng tròn (`Alt + click` là gõ chữ ngay): `"enable_radial_menu": false` trong `voice-mic-settings.local.json`.
+
+## Trò chuyện bằng giọng nói
+
+- Mở: `Alt + click` rồi chọn "Nói", hoặc phím tắt `Ctrl+Alt+V` ở bất kỳ đâu (đổi bằng `voice_chat_hotkey`).
+- Hoặc chọn "Gõ chữ" rồi nói "trò chuyện", "nói chuyện" hay "voice".
+- Tạm dừng: nói "tạm dừng", "chờ chút", hoặc bấm `Ctrl+Alt+V`. Nói tiếp: `Alt + click` hoặc `Ctrl+Alt+V`.
+- Tắt hẳn: nói "thôi", "dừng lại", "cảm ơn em", hoặc bấm `Esc`. Im lặng khoảng 12 giây cũng tự nghỉ.
+- Bộ não AI tự chọn theo thứ tự: Claude API (có `ANTHROPIC_API_KEY` và đã cài `anthropic`), Claude Code dòng lệnh
+  (đã đăng nhập), Ollama trên máy (`qwen2.5:7b`). Ép bằng `voice_chat_backend`: `auto`, `claude-api`, `claude-cli`, `ollama`.
+- Mỗi cuộc trò chuyện lưu trong `reader-data/conversations/`.
+
+## Trợ lý đọc tài liệu
+
+Đọc to tài liệu, ghi chú, bài nghiên cứu bằng giọng tiếng Việt tự nhiên (Hoài My, Nam Minh).
+
+- Mở: chạy `Start Doc Reader.cmd`, hoặc kéo thả một file lên file này.
+- Đầu vào: txt, md, pdf có lớp chữ, docx, html, epub, link web, Google Docs công khai, nội dung vừa `Ctrl+C`.
+- Phím tắt: `Space` đọc hoặc dừng, mũi tên trái phải để qua câu, `N` ghi chú, `Q` đặt câu hỏi, `R` đọc lại câu.
+- Ghi chú lưu thành Markdown trong `reader-data/notes/`. Chạy local tại `http://127.0.0.1:8767`.
+- Cần Internet để tạo giọng đọc (`edge-tts`), âm thanh được cache trong `reader-data/tts-cache/`.
+
+## Cấu hình mic
+
+Sửa `voice-mic-settings.local.json` (riêng từng máy, không đưa lên GitHub):
 
 ```json
 {
   "preferred_microphone": "BKD-11 Pro Audio",
-  "microphone_name_hints": [
-    "BKD-11 Pro Audio",
-    "USB Audio Device",
-    "Microphone",
-    "Headset"
-  ],
-  "enable_particle_effect": true,
-  "enable_context_memory": true
+  "microphone_name_hints": ["USB Audio Device", "Microphone", "Headset"],
+  "enable_whisper_fallback": true,
+  "whisper_model": "small"
 }
 ```
 
-Neu muon app tu chon mic theo danh sach goi y, dat:
+`preferred_microphone` để trống thì app tự chọn theo danh sách gợi ý.
 
-```json
-"preferred_microphone": ""
-```
+## Cứu lại nội dung vừa nói
 
-## Tro ly doc tai lieu (Doc Reader)
+- `Ctrl+V` dán lại chữ mới nhất.
+- `voice-last.txt`: chữ mới nhất. `voice-transcripts.jsonl`: lịch sử. `voice-last.wav`: âm thanh gần nhất.
+- Các file này chỉ nằm trên máy, đã có trong `.gitignore`.
 
-Tro ly doc to tai lieu, ghi chu, bai nghien cuu bang giong tieng Viet tu nhien (Hoai My / Nam Minh),
-de chi can nghe. Dang nghe ma thac mac thi dat cau hoi hoac ghi chu ngay tai cau do.
+## Chạy từ mã nguồn
 
-- Mo: chay `Start Doc Reader.cmd` (hoac keo tha mot file len file nay de mo ngay file do).
-- Dau vao: txt, md (Obsidian), pdf co lop chu, docx, html, epub, link web, Google Docs cong khai,
-  noi dung vua `Ctrl+C` (chu, link hoac duong dan file).
-- Doc tung cau, to sang cau dang doc, tu cuon theo, doc truoc cac cau ke tiep de khong bi ngat.
-- Cau tieng Anh tu doi sang giong tieng Anh. Toc do 0.8x den 2x. Nho vi tri dang nghe cua tung tai lieu.
-- Phim tat: `Space` doc/dung, `<-` `->` cau truoc/sau, `Shift` + mui ten nhay doan, `N` ghi chu,
-  `Q` dat cau hoi, `R` doc lai cau hien tai. Nut tai nghe va phim media cung dieu khien duoc.
-- Ghi chu nhap bang tay, bang micro trong o ghi chu, hoac bang Voice Mic (`Alt + click`).
-- Moi tai lieu co mot file ghi chu Markdown trong `reader-data/notes/` (kem cau trich, ngu canh doan van,
-  danh sach cau hoi chua ro). `reader-data/notes/_INDEX.md` liet ke tat ca. Nut `Copy de hoi Claude`
-  tao san loi nhan kem duong dan file de dan cho Claude doc va tra loi.
-- Chay local tai `http://127.0.0.1:8767`, chi nhan ket noi tu chinh may nay. Can Internet de tao giong doc
-  (dich vu giong doc cua Microsoft Edge qua `edge-tts`), am thanh duoc cache trong `reader-data/tts-cache/`.
-- Du lieu cua tro ly doc nam trong `reader-data/` va khong dua len GitHub.
-- Doi cong, thu muc ghi chu (vi du mot thu muc Obsidian hoac Google Drive): sua `reader-data/settings.json`
-  (`port`, `notes_dir`).
-
-## Vong tron chon che do (Alt + click)
-
-- `Alt + click` vao khung chat: hien ngay vong tron nho, chua vao che do nao. O dang tro sang mau cam.
-  Tro chuot vao o roi click (hoac giu chuot keo toi o roi tha): tren = Go chu, trai = Doc, phai = Noi, duoi = Huy.
-  - Go chu: voice to text nhu cu.
-  - Doc: boi den hoac Ctrl+C doan can nghe truoc; tro ly giong nam doc to doan do va luu vao Tro ly doc.
-    Chua copy gi thi mo cua so Tro ly doc de anh dan hoac keo file vao.
-  - Noi: tro chuyen voi tro ly.
-  - Huy: `Esc`, click ra ngoai, hoac de yen 10 giay.
-- Dang nghe: nut tron nho co song am, nhan trang thai co dau. Noi xong hien the ket qua kem so ky tu, so tu,
-  toc do noi, do tin cay.
-- Dang doc: `Ctrl+Alt+V` hoac `Alt + click` de tam dung / doc tiep, `Esc` de dung han.
-- Tat vong tron (Alt + click go chu ngay nhu truoc): `"enable_radial_menu": false` trong `voice-mic-settings.local.json`.
-
-## Tro chuyen bang giong noi (lenh "voice")
-
-- Mo chac chan, khong can noi lenh: `Alt + click` roi chon nut "Noi", hoac phim tat `Ctrl+Alt+V` o bat ky dau.
-  Doi phim tat: `"voice_chat_hotkey": "ctrl+alt+space"` (de trong thi tat).
-- Mo bang giong noi: chon "Go chu" roi noi "tro chuyen" (nhan dien chac nhat), "noi chuyen", hoac "voice".
-  Chu "voice" noi mot minh Google hay nghe nham, nen may xet ca cac cach nghe du phong va nghe them mot luot tieng Anh.
-- Tro ly giong nam (Nam Minh) chao anh, anh noi cau hoi, tro ly tra loi bang giong noi roi tu nghe tiep.
-- Khi Google khong nghe ra chu nao ma Whisper chi doan duoc vai chu cho ca doan dai (thuong la tieng on),
-  Voice Mic bao "thu lai" thay vi dan cau vo nghia vao khung chat.
-- Noi "de nguyen" / "giu nguyen" / "nhap chu": mic nghe lai de anh doc chu vao khung chat nhu cu.
-- Noi binh thuong (khong phai lenh): van go chu vao khung chat nhu truoc.
-- Tam dung (giu cuoc tro chuyen): noi "tam dung", "cho chut", "doi da", hoac bam `Ctrl+Alt+V`.
-  Noi tiep: `Alt + click` hoac `Ctrl+Alt+V`.
-- Tat han: noi "thoi", "dung lai", "cam on em", "tam biet", hoac bam `Esc`. Im lang khoang 12 giay cung tu nghi.
-  `Alt + click` luc tro ly dang noi de ngat loi.
-- Giong doc tu nhien hon: Tro ly doc doc lien ca doan (ngu dieu nhu nguoi doc), doc day du chu viet tat
-  (TP. HCM, 50k, 5tr, 9h30...), co 4 giong da ngu moi (Andrew, Brian, Ava, Emma) doc tot tu tieng Anh xen ke.
-  Nut "Nghe thu" de so sanh. Bang doc tu sua trong `reader-data/pronunciations.json` (vi du `"AI": "ây ai"`).
-- Bo nao AI tu chon: Claude API (neu co `ANTHROPIC_API_KEY` va da cai `anthropic`) -> Claude Code dong lenh
-  (neu da `claude` roi `/login`) -> Ollama tren may (`qwen2.5:7b`). Ep bang `voice_chat_backend` trong
-  `voice-mic-settings.local.json` (`auto`, `claude-api`, `claude-cli`, `ollama`). Doi giong: `voice_chat_voice`,
-  toc do: `voice_chat_rate` (vi du `+8%`). Tat lenh giong noi: `"enable_voice_commands": false`.
-- Moi cuoc tro chuyen luu lai trong `reader-data/conversations/`.
-
-## Chay tu source
-
-Yeu cau:
-
-- Windows 10/11
-- Python 3.10 tro len
-- Microphone hoat dong
-- Internet de dung Google Speech Recognition
-
-Cai thu vien:
+Yêu cầu: Windows 10 hoặc 11, Python 3.10 trở lên, micro, Internet (Google Speech Recognition).
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Chay app:
+Muốn có Whisper làm dự phòng khi Google không nghe ra (nặng vài trăm MB):
 
 ```powershell
-python .\voice_mic_icon.py
+.\.venv\Scripts\python.exe -m pip install -r requirements-whisper.txt
 ```
 
-Hoac:
+Chạy: `Start VoiNoi.cmd` (tự tắt bản cũ đang chạy, chỉ giữ một bản).
 
-```text
-Start Vietnamese Voice Mic.cmd
-```
-
-## Cai tu chay cung Windows
-
-Chay PowerShell tai thu muc project:
+## Tự chạy cùng Windows
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install-startup.ps1
 ```
 
-Go auto-start:
+Gỡ: `uninstall-startup.ps1`.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\uninstall-startup.ps1
-```
-
-## Build ban phat hanh
-
-Chay:
+## Build bản phát hành
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-Ket qua:
+Kết quả:
 
 ```text
-dist\VietnameseVoiceMic\VietnameseVoiceMic.exe
-releases\VietnameseVoiceMic-windows.zip
+dist\VoiNoi\VoiNoi.exe
+releases\VoiNoi-windows.zip
 releases\version.json
 ```
 
-Gui thu muc nay cho nguoi khac:
+Bản `.exe` không đóng gói Whisper để gọn nhẹ. Tự cập nhật đọc manifest tại
+`https://github.com/ducdg88/voinoi/releases/latest/download/version.json`, nên mỗi bản mới cần tải cả
+`VoiNoi-windows.zip` và `version.json` lên GitHub Release.
 
-```text
-dist\VietnameseVoiceMic
-```
+## Xử lý lỗi thường gặp
 
-Hoac upload zip trong `releases` len GitHub Release.
+- Không nhận giọng: kiểm tra mic trong Windows và `preferred_microphone`.
+- Nhận sai nhiều: nói gần mic hơn, giảm tiếng nền, thêm từ khóa vào `speech_context_terms`.
+- Không dán đúng chỗ: `Alt + click` đúng vào ô nhập trước khi chọn "Gõ chữ".
+- Xem chi tiết từng bước (có mốc mili giây): `voice-mic.log`.
 
-## Day len GitHub
+## File quan trọng
 
-Kiem tra thay doi:
-
-```powershell
-git status
-git diff --stat
-```
-
-Commit:
-
-```powershell
-git add .
-git commit -m "Improve Vietnamese Voice Mic dictation"
-```
-
-Push len GitHub:
-
-```powershell
-git push origin main
-```
-
-## Cap nhat ban moi
-
-Build script tao `releases\version.json` gom:
-
-- `version`
-- `zip_url`
-- `sha256`
-- `notes`
-- `release_url`
-
-Auto-update mac dinh doc manifest tai:
-
-```text
-https://github.com/Ducpt88/VietnameseVoiceMic/releases/latest/download/version.json
-```
-
-Khi tao ban moi, chay `build.ps1`, sau do upload 2 file nay len GitHub Release:
-
-```text
-releases\VietnameseVoiceMic-windows.zip
-releases\version.json
-```
-
-## Xu ly loi thuong gap
-
-- Khong nhan giong: kiem tra mic trong Windows va `preferred_microphone`.
-- Bi cat cau som: tang `WEBRTC_VOICE_END_SECONDS` va `RMS_VOICE_END_SECONDS` trong `voice_mic_icon.py`.
-- Nhan sai nhieu: noi gan mic hon, giam tieng nen, hoac them tu khoa vao `speech_context_terms`.
-- Khong dan dung cho: hay `Alt + click` dung vao o input truoc khi noi.
-- App khong bat: phai giu `Alt` trong luc click chuot trai vao o input.
-
-## File quan trong
-
-- `voice_mic_icon.py`: code app chinh.
-- `voice-mic-settings.json`: cau hinh mic, context, update.
-- `voice-mic-settings.local.json`: cau hinh rieng cua tung may, khong dua len GitHub.
-- `voice-context.json`: bo nho public mac dinh, khong chua transcript ca nhan.
-- `voice-context.local.json`: bo nho hoc rieng cua tung may, khong dua len GitHub.
-- `voice-last.txt`: transcript moi nhat de cuu lai khi can.
-- `voice-transcripts.jsonl`: lich su transcript tren may local.
-- `voice-last.wav`: audio gan nhat da thu tren may local.
-- `Start Vietnamese Voice Mic.cmd`: chay app tu source.
-- `Start-VietnameseVoiceMic.ps1`: restart app va dam bao chi con mot instance.
-- `build.ps1`: build exe, zip release va manifest.
-- `updater.ps1`: helper cap nhat ban moi.
-- `install-startup.ps1`: cai auto-start cung Windows.
-- `uninstall-startup.ps1`: go auto-start.
+- `voice_mic_icon.py`: code app chính.
+- `reader/`: Trợ lý đọc và trò chuyện bằng giọng nói. `doc_reader.py`: mở Trợ lý đọc.
+- `voice-mic-settings.json`: cấu hình mặc định. `voice-mic-settings.local.json`: cấu hình riêng từng máy.
+- `voice-context.json`: từ vựng mặc định. `voice-context.local.json`: từ vựng app tự học trên máy.
+- `Start VoiNoi.cmd`, `Start-VoiNoi.ps1`: chạy bản nguồn.
+- `build.ps1`, `updater.ps1`: đóng gói và tự cập nhật.
+- `install-shortcut.ps1`, `install-startup.ps1`, `uninstall-startup.ps1`: shortcut và tự chạy cùng Windows.
+- `assets/`: icon VoiNoi và script vẽ icon (`make_icon.py`).

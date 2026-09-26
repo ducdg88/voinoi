@@ -1,8 +1,9 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Venv = Join-Path $Root ".venv"
-$Version = "1.1.1"
-$ReleaseBaseUrl = "https://github.com/Ducpt88/VietnameseVoiceMic/releases/latest/download"
+$Version = "2.0.0"
+$AppName = "VoiNoi"
+$ReleaseBaseUrl = "https://github.com/ducdg88/voinoi/releases/latest/download"
 
 Set-Location $Root
 
@@ -13,27 +14,48 @@ if (-not (Test-Path $Venv)) {
 & "$Venv\Scripts\python.exe" -m pip install --upgrade pip
 & "$Venv\Scripts\python.exe" -m pip install -r requirements.txt
 
+# Ban .exe gon nhe: Whisper (du phong ngoai tuyen, vai tram MB) khong dong goi.
+# Muon dung Whisper thi chay ban nguon voi requirements-whisper.txt.
 & "$Venv\Scripts\python.exe" -m PyInstaller `
   --noconfirm `
   --clean `
   --noconsole `
   --onedir `
-  --name VietnameseVoiceMic `
+  --name $AppName `
+  --icon "assets\voinoi.ico" `
   --add-data "voice-mic-settings.json;." `
   --add-data "voice-context.json;." `
+  --add-data "assets\voinoi.ico;assets" `
+  --add-data "reader\static;reader\static" `
+  --add-data "reader\huong-dan.md;reader" `
+  --hidden-import doc_reader `
+  --additional-hooks-dir "pyinstaller-hooks" `
+  --exclude-module faster_whisper `
+  --exclude-module whisper `
+  --exclude-module torch `
+  --exclude-module ctranslate2 `
+  --exclude-module onnxruntime `
+  --exclude-module av `
+  --exclude-module tokenizers `
+  --exclude-module huggingface_hub `
+  --exclude-module numba `
+  --exclude-module scipy `
   voice_mic_icon.py
+if ($LASTEXITCODE -ne 0) {
+  throw "PyInstaller failed with exit code $LASTEXITCODE"
+}
 
-$Out = Join-Path $Root "dist\VietnameseVoiceMic"
-Copy-Item (Join-Path $Root "README.md") $Out -Force
-Copy-Item (Join-Path $Root "install-startup.ps1") $Out -Force
-Copy-Item (Join-Path $Root "uninstall-startup.ps1") $Out -Force
-Copy-Item (Join-Path $Root "updater.ps1") $Out -Force
-Copy-Item (Join-Path $Root "voice-mic-settings.json") $Out -Force
-Copy-Item (Join-Path $Root "voice-context.json") $Out -Force
+$Out = Join-Path $Root "dist\$AppName"
+foreach ($file in @("README.md", "install-startup.ps1", "uninstall-startup.ps1", "install-shortcut.ps1", "updater.ps1", "voice-mic-settings.json", "voice-context.json")) {
+  Copy-Item (Join-Path $Root $file) $Out -Force
+}
+New-Item -ItemType Directory -Force -Path (Join-Path $Out "assets") | Out-Null
+Copy-Item (Join-Path $Root "assets\voinoi.ico") (Join-Path $Out "assets") -Force
 
 $ReleaseDir = Join-Path $Root "releases"
 New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
-$Zip = Join-Path $ReleaseDir "VietnameseVoiceMic-windows.zip"
+$ZipName = "$AppName-windows.zip"
+$Zip = Join-Path $ReleaseDir $ZipName
 if (Test-Path $Zip) {
   Remove-Item $Zip -Force
 }
@@ -41,15 +63,15 @@ Compress-Archive -Path (Join-Path $Out "*") -DestinationPath $Zip -Force
 $Hash = (Get-FileHash -Algorithm SHA256 -Path $Zip).Hash.ToLowerInvariant()
 $Manifest = [ordered]@{
   version = $Version
-  zip_url = "VietnameseVoiceMic-windows.zip"
+  zip_url = $ZipName
   sha256 = $Hash
-  notes = "Vietnamese Voice Mic $Version"
-  release_url = "$ReleaseBaseUrl/VietnameseVoiceMic-windows.zip"
+  notes = "$AppName $Version"
+  release_url = "$ReleaseBaseUrl/$ZipName"
 }
 $Manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path (Join-Path $ReleaseDir "version.json")
 
 Write-Host ""
 Write-Host "Build complete:" $Out
-Write-Host "Run:" (Join-Path $Out "VietnameseVoiceMic.exe")
+Write-Host "Run:" (Join-Path $Out "$AppName.exe")
 Write-Host "Zip:" $Zip
 Write-Host "Manifest:" (Join-Path $ReleaseDir "version.json")

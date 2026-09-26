@@ -41,7 +41,7 @@ Mọi câu bạn viết sẽ được đọc to bằng giọng nói, nên hãy n
 - Thân thiện, lễ phép, tự nhiên như một trợ lý người Việt, có thể mở đầu bằng "Dạ" khi phù hợp.
 - Nếu không chắc chắn về một thông tin, hãy nói rõ là em không chắc."""
 
-GREETING = "Dạ, em chào anh. Em nghe đây, anh cứ nói nhé."
+GREETING = "Dạ, em nghe đây anh."  # ngan: noi xong la nghe ngay (cau cu dai ~4 giay)
 GOODBYE = "Dạ vâng, em chào anh. Khi nào cần anh cứ gọi em nhé."
 ACK = "Dạ."
 UNCLEAR = "Em chưa nghe rõ, anh nói lại giúp em nhé."
@@ -309,6 +309,51 @@ def pick_brain(preference: str = "auto", ollama_model: str = "") -> Brain | None
     return None
 
 
+# Do bo nao mat vai giay (goi "claude auth status", hoi Ollama). Truoc day moi lan bam "Noi" deu do lai
+# roi moi chao, anh phai cho ~6 giay. Gio do san o nen va nho 10 phut.
+BRAIN_CACHE_SECONDS = 600
+_brain_cache: dict[str, tuple[float, Brain]] = {}
+_brain_lock = threading.Lock()
+
+
+def pick_brain_cached(preference: str = "auto", ollama_model: str = "", max_age: float = BRAIN_CACHE_SECONDS) -> Brain | None:
+    key = f"{preference}|{ollama_model}"
+    with _brain_lock:  # hai noi cung hoi thi cho chung mot lan do
+        cached = _brain_cache.get(key)
+        if cached and time.monotonic() - cached[0] < max_age:
+            return cached[1]
+        brain = pick_brain(preference, ollama_model)
+        if brain is not None:
+            _brain_cache[key] = (time.monotonic(), brain)
+        else:
+            _brain_cache.pop(key, None)  # chua co bo nao: lan sau do lai (anh co the vua mo Ollama)
+        return brain
+
+
+def forget_brain() -> None:
+    with _brain_lock:
+        _brain_cache.clear()
+
+
+def prefetch_brain(preference: str = "auto", ollama_model: str = "", voice: str = "", rate: str = "") -> None:
+    """Chuan bi san o nen: bo nao AI va giong cac cau noi co dinh (tao giong lan dau mat toi ~10 giay)."""
+    voice = voice or DEFAULT_VOICE
+    rate = rate or DEFAULT_RATE
+
+    def worker() -> None:
+        try:
+            pick_brain_cached(preference, ollama_model)
+        except Exception:
+            pass
+        for text, auto_english in ((GREETING, True), (ACK, False), (RESUMED, True), (UNCLEAR, True)):
+            try:
+                tts.synthesize_to_file(text, voice, auto_english, rate)
+            except Exception:
+                pass
+
+    threading.Thread(target=worker, daemon=True, name="brain-prefetch").start()
+
+
 # ------------------------------------------------------------------ phat am thanh (Windows MCI)
 
 _winmm = ctypes.WinDLL("winmm")
@@ -519,7 +564,11 @@ class Conversation:
     def start(self) -> None:
         def worker() -> None:
             self.on_state("speak", "Chế độ trò chuyện")
-            self.brain = pick_brain(self.preference, self.ollama_model)
+            # tao san giong chao song song voi luc do bo nao (lan dau chua co trong cache)
+            self._synth_pool.submit(tts.synthesize_to_file, GREETING, self.voice, True, self.rate)
+            self.brain = pick_brain_cached(self.preference, self.ollama_model)
+            if not self.active:
+                return  # anh da bam Esc trong luc cho
             if self.brain:
                 self.log(f"voice chat brain: {self.brain.name}")
                 threading.Thread(target=self.brain.warm_up, daemon=True).start()
@@ -637,7 +686,8 @@ class Conversation:
             except BrainUnavailable as exc:
                 tried.add(type(self.brain).__name__)
                 self.log(f"voice chat brain {self.brain.name} unavailable: {exc}")
-                nxt = pick_brain(self.preference, self.ollama_model)
+                forget_brain()
+                nxt = pick_brain_cached(self.preference, self.ollama_model)
                 if not nxt or type(nxt).__name__ in tried:
                     raise
                 self.brain = nxt

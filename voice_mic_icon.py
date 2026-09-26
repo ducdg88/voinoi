@@ -1,5 +1,5 @@
 ﻿#!/usr/bin/env python3
-"""Native draggable mic icon that types Vietnamese speech into the selected field."""
+"""VoiNoi (Voi Noi): noi tieng Viet thanh chu vao dung o dang chon, doc to tai lieu, tro chuyen bang giong noi."""
 
 from __future__ import annotations
 
@@ -59,9 +59,9 @@ LOCK_FILE = APP_DIR / "voice-mic.lock"
 LAST_TRANSCRIPT_FILE = APP_DIR / "voice-last.txt"
 TRANSCRIPT_HISTORY_FILE = APP_DIR / "voice-transcripts.jsonl"
 LAST_AUDIO_FILE = APP_DIR / "voice-last.wav"
-APP_TITLE = "Vietnamese Voice Mic"
-APP_VERSION = "1.1.1"
-APP_BUILD = "public-autoupdate-2026-07-10"
+APP_TITLE = "VoiNoi"
+APP_VERSION = "2.0.0"
+APP_BUILD = "voinoi-2026-09-26"
 SIZE = 38
 CORE = 26
 HUD_WIDTH = 220
@@ -108,10 +108,12 @@ GOOGLE_CHUNK_BOUNDARY_SEARCH_SECONDS = 2.5
 GOOGLE_CHUNK_MIN_SECONDS = 5.0
 GOOGLE_CHUNK_MIN_TAIL_SECONDS = 4.5
 GOOGLE_MIN_RETRY_CHUNK_SECONDS = 4.0
-GOOGLE_CHUNK_RETRY_ATTEMPTS = 2
 GOOGLE_LOW_CONFIDENCE_FALLBACK_THRESHOLD = 0.82
 WHISPER_VERIFY_LONG_AUDIO_SECONDS = 12.0
 WHISPER_SELECTION_MARGIN = 0.04
+LOW_COVERAGE_WPM = 92  # Google tra ve it hon muc nay (tu/phut) cho doan dai => nghi roi chu (~5% doan); setting low_coverage_wpm, 0 = tat
+LOW_COVERAGE_MIN_CHUNK_SECONDS = 5.0
+MIN_VOICED_SECONDS_FOR_WHISPER = 0.6  # Google khong nghe ra va tieng nguoi that it hon muc nay: bo qua, khong doi Whisper
 VOICE_CONTEXT_MAX_TERMS = 300
 VOICE_CONTEXT_MAX_PHRASES = 220
 TRANSPARENT = "#ff00ff"
@@ -123,10 +125,7 @@ AUTO_PHRASE_LIMIT_SECONDS = 300
 INITIAL_NO_SPEECH_TIMEOUT_SECONDS = 12.0
 AUTO_CLICK_POLL_SECONDS = 0.035
 AUTO_CLICK_COOLDOWN_SECONDS = 0.8
-AUTO_START_FROM_CHAT_CLICK = False
-ALT_CLICK_ONLY = True
 CLICK_DETECT_RETRY_MS = (90, 220, 420, 700)
-ARM_TARGET_SECONDS = 60.0
 CHAT_BOTTOM_FRACTION = 0.14
 CHAT_BOTTOM_MAX_HEIGHT = 110
 CHAT_HINT_FRACTION = 0.25
@@ -176,7 +175,6 @@ SM_XVIRTUALSCREEN = 76
 SM_YVIRTUALSCREEN = 77
 SM_CXVIRTUALSCREEN = 78
 SM_CYVIRTUALSCREEN = 79
-VOICE_HOTKEY_NAME = "Ctrl+Alt+M"
 SHORT_COMMAND_MAX_SECONDS = 4.0
 RADIAL_TIMEOUT_SECONDS = 10.0  # vong tron tu dong neu khong chon gi
 RADIAL_SIZE = 220              # khung ve (vong tron 92px + cho cho hieu ung phong/vien sang)
@@ -290,13 +288,38 @@ def save_voice_targets(targets: dict[str, tuple[int, int]]) -> None:
         return
 
 
+_JSON_CACHE: dict[Path, tuple[tuple[int, int], object]] = {}
+_JSON_CACHE_LOCK = threading.Lock()
+
+
+def file_signature(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
+
+
+def read_json_cached(path: Path) -> object:
+    """Doc JSON, chi doc lai dia khi file doi. Truoc day moi lan lam sach cau doc lai file ca nghin lan (~3 giay)."""
+    signature = file_signature(path)
+    if signature is None:
+        return None
+    with _JSON_CACHE_LOCK:
+        cached = _JSON_CACHE.get(path)
+        if cached and cached[0] == signature:
+            return cached[1]
+    data = json.loads(path.read_text(encoding="utf-8"))
+    with _JSON_CACHE_LOCK:
+        _JSON_CACHE[path] = (signature, data)
+    return data
+
+
 def load_settings() -> dict[str, object]:
     settings: dict[str, object] = {}
     for path in (SETTINGS_FILE, LOCAL_SETTINGS_FILE):
         try:
-            if not path.exists():
-                continue
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = read_json_cached(path)
             if isinstance(data, dict):
                 settings.update(data)
         except Exception as exc:
@@ -329,11 +352,12 @@ def first_matching_microphone(names: list[str], needle: str) -> tuple[int, str] 
     return index, name
 
 
-def select_microphone_device(settings: dict[str, object]) -> tuple[int | None, str]:
+def select_microphone_device(settings: dict[str, object], names: list[str] | None = None) -> tuple[int | None, str]:
     preferred = str(settings.get("preferred_microphone", "") or "").strip().lower()
     fallback_hints = settings.get("microphone_name_hints", ["Microphone", "Headset", "USB Audio Device", "External Microphone"])
     hints = [str(h).lower() for h in fallback_hints if str(h).strip()]
-    names = sr.Microphone.list_microphone_names()
+    if names is None:
+        names = AUDIO_DEVICES.refresh()
 
     if preferred:
         match = first_matching_microphone(names, preferred)
@@ -348,8 +372,9 @@ def select_microphone_device(settings: dict[str, object]) -> tuple[int | None, s
     return None, "system default"
 
 
-def microphone_device_candidates(settings: dict[str, object]) -> list[tuple[int | None, str]]:
-    names = sr.Microphone.list_microphone_names()
+def microphone_device_candidates(settings: dict[str, object], names: list[str] | None = None) -> list[tuple[int | None, str]]:
+    if names is None:
+        names = AUDIO_DEVICES.refresh()
     preferred = str(settings.get("preferred_microphone", "") or "").strip().lower()
     fallback_hints = settings.get("microphone_name_hints", ["Microphone", "Headset", "USB Audio Device", "External Microphone"])
     hints = [str(h).lower() for h in fallback_hints if str(h).strip()]
@@ -362,7 +387,7 @@ def microphone_device_candidates(settings: dict[str, object]) -> list[tuple[int 
         seen.add(index)
         candidates.append((index, name))
 
-    selected_index, selected_name = select_microphone_device(settings)
+    selected_index, selected_name = select_microphone_device(settings, names)
     add(selected_index, selected_name)
 
     needles = [needle for needle in [preferred, *hints] if needle]
@@ -483,7 +508,8 @@ def beep_async(kind: str) -> None:
 
 def log(message: str) -> None:
     try:
-        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        now = time.time()
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)) + f".{int(now * 1000) % 1000:03d}"
         with LOG_FILE.open("a", encoding="utf-8") as file:
             file.write(f"{stamp} {message}\n")
     except Exception:
@@ -546,14 +572,21 @@ def reader_request(path: str, body: dict | None = None, timeout: float = 30.0) -
         return json.loads(response.read().decode("utf-8"))
 
 
+def doc_reader_command(*args: str) -> list[str]:
+    """Lenh chay Tro ly doc: ban .exe tu goi lai chinh no voi --doc-reader, ban nguon chay doc_reader.py."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--doc-reader", *args]
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    return [str(pythonw if pythonw.exists() else sys.executable), "-X", "utf8", str(APP_DIR / "doc_reader.py"), *args]
+
+
 def reader_import_clipboard() -> dict:
     """Dua noi dung clipboard (chu, link hoac duong dan file) vao Tro ly doc; tu bat may chu neu chua chay."""
     try:
         reader_request("ping", timeout=1.5)
     except Exception:
-        pythonw = Path(sys.executable).with_name("pythonw.exe")
         subprocess.Popen(
-            [str(pythonw if pythonw.exists() else sys.executable), "-X", "utf8", str(APP_DIR / "doc_reader.py"), "--no-browser"],
+            doc_reader_command("--no-browser"),
             cwd=str(APP_DIR), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         deadline = time.monotonic() + 15
@@ -594,7 +627,7 @@ def acquire_single_instance_lock() -> bool:
         log("single instance mutex failed; falling back to file lock")
     elif last_error == ERROR_ALREADY_EXISTS:
         kernel32.CloseHandle(handle)
-        log("another Vietnamese Voice Mic instance is already running; exiting")
+        log("another VoiNoi instance is already running; exiting")
         return False
     else:
         SINGLE_INSTANCE_MUTEX_HANDLE = handle
@@ -613,10 +646,113 @@ def acquire_single_instance_lock() -> bool:
         if SINGLE_INSTANCE_MUTEX_HANDLE:
             kernel32.CloseHandle(SINGLE_INSTANCE_MUTEX_HANDLE)
             SINGLE_INSTANCE_MUTEX_HANDLE = None
-        log("another Vietnamese Voice Mic instance is already running; exiting via file lock")
+        log("another VoiNoi instance is already running; exiting via file lock")
         return False
 
     return True
+
+
+class AudioDevices:
+    """Mot PyAudio dung chung cho moi phien nghe.
+
+    sr.Microphone khoi tao PortAudio 3-4 lan moi phien (liet ke thiet bi, kiem tra, mo) mat ~1 giay truoc khi
+    nghe duoc. Giu san mot ban thi mo mic chi con ~30 ms. Danh sach thiet bi lam moi khi cu hoac khi mo loi
+    (cam/rut mic)."""
+
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+        self.pa = None
+        self.names: list[str] = []
+        self.loaded_at = 0.0
+        self.open_streams = 0
+
+    def refresh(self, force: bool = False, max_age: float | None = None) -> list[str]:
+        with self.lock:
+            stale = (
+                self.pa is None
+                or force
+                or (max_age is not None and time.monotonic() - self.loaded_at > max_age)
+            )
+            if stale and (self.open_streams == 0 or self.pa is None):
+                import pyaudio
+
+                if self.pa is not None:
+                    try:
+                        self.pa.terminate()
+                    except Exception:
+                        pass
+                    self.pa = None
+                pa = pyaudio.PyAudio()
+                names: list[str] = []
+                for index in range(pa.get_device_count()):
+                    try:
+                        names.append(str(pa.get_device_info_by_index(index).get("name", "")))
+                    except Exception:
+                        names.append("")
+                self.pa = pa
+                self.names = names
+                self.loaded_at = time.monotonic()
+            return list(self.names)
+
+    def prewarm(self, max_age: float = 30.0) -> None:
+        threading.Thread(target=self._prewarm, args=(max_age,), daemon=True, name="mic-prewarm").start()
+
+    def _prewarm(self, max_age: float) -> None:
+        try:
+            self.refresh(max_age=max_age)
+        except Exception as exc:
+            log(f"mic prewarm error: {type(exc).__name__}: {exc}")
+
+    def open(self, index: int | None) -> "FastMicSource":
+        with self.lock:
+            if self.pa is None:
+                self.refresh()
+            source = FastMicSource(self.pa, index)
+            self.open_streams += 1
+            return source
+
+    def close(self, source: "FastMicSource") -> None:
+        source.close()
+        with self.lock:
+            self.open_streams = max(0, self.open_streams - 1)
+
+
+class FastMicSource:
+    """Giong sr.Microphone (stream, CHUNK, SAMPLE_RATE, SAMPLE_WIDTH) nhung dung PyAudio co san."""
+
+    CHUNK = 1024
+
+    def __init__(self, pa: object, index: int | None) -> None:
+        import pyaudio
+
+        info = pa.get_device_info_by_index(index) if index is not None else pa.get_default_input_device_info()
+        if int(info.get("maxInputChannels", 0) or 0) < 1:
+            raise OSError(f"device {index} has no input channels")
+        self.SAMPLE_RATE = int(info["defaultSampleRate"])
+        self.SAMPLE_WIDTH = pyaudio.get_sample_size(pyaudio.paInt16)
+        self.stream = pa.open(
+            input_device_index=index,
+            channels=1,
+            format=pyaudio.paInt16,
+            rate=self.SAMPLE_RATE,
+            frames_per_buffer=self.CHUNK,
+            input=True,
+        )
+
+    def close(self) -> None:
+        try:
+            if not self.stream.is_stopped():
+                self.stream.stop_stream()
+        except Exception:
+            pass
+        try:
+            self.stream.close()
+        except Exception:
+            pass
+
+
+AUDIO_DEVICES = AudioDevices()
+MIC_DEVICE_MAX_AGE_SECONDS = 300.0
 
 
 def read_audio_chunk(stream: object, chunk_size: int) -> bytes:
@@ -1043,7 +1179,7 @@ _BROWSER_WIN_CLASSES = frozenset({"Chrome_WidgetWin_1", "Chrome_WidgetWin_0"})
 # Tá»« khÃ³a trong tÃªn UIA element gá»£i Ã½ Ä‘Ã¢y lÃ  Ã´ nháº­p liá»‡u
 _INPUT_NAME_HINTS = frozenset({
     "write", "message", "compose", "type here", "input", "send", "prompt",
-    "nháº­p", "soáº¡n", "chat", "reply", "your message",
+    "nhập", "soạn", "chat", "reply", "your message",
 })
 
 
@@ -1097,9 +1233,29 @@ def uia_is_likely_input(point: tuple[int, int]) -> tuple[bool, str]:
         return False, f"uia-error={type(exc).__name__}"
 
 
-def uia_text_input_at_point(point: tuple[int, int]) -> tuple[bool, str]:
-    """Legacy wrapper kept for compatibility; delegates to uia_is_likely_input."""
-    return uia_is_likely_input(point)
+def _init_uia_thread() -> None:
+    try:
+        import comtypes
+
+        comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
+    except Exception:
+        pass
+
+
+# UI Automation co khi mat 2-5 giay (Chrome, terminal) va Microsoft khuyen khong goi tu luong giao dien:
+# goi tren luong rieng de vong tron, HUD, phim tat khong bao gio bi treo.
+_UIA_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="uia", initializer=_init_uia_thread)
+
+
+def uia_probe(point: tuple[int, int], timeout: float = 1.5) -> tuple[bool, str]:
+    """Goi tu luong phu. Qua han thi coi nhu khong phai o nhap (luot doc cham van chay xong o nen)."""
+    future = _UIA_POOL.submit(uia_is_likely_input, point)
+    try:
+        return future.result(timeout)
+    except concurrent.futures.TimeoutError:
+        return False, f"uia-timeout>{timeout:.1f}s"
+    except Exception as exc:
+        return False, f"uia-error={type(exc).__name__}"
 
 
 def ellipsize(text: str, limit: int = 86) -> str:
@@ -1347,14 +1503,37 @@ def apply_custom_replacements(text: str) -> str:
     return text
 
 
+_CONTEXT_CACHE: dict[str, object] = {}
+
+
+def context_cache_key() -> tuple[object, ...]:
+    # stat 4 file moi lan lam sach cau cung ton; kiem tra lai toi da 2 lan/giay
+    now = time.monotonic()
+    cached = _CONTEXT_CACHE.get("key")
+    if cached and now - cached[0] < 0.5:
+        return cached[1]
+    key = tuple(file_signature(path) for path in (SETTINGS_FILE, LOCAL_SETTINGS_FILE, CONTEXT_FILE, LOCAL_CONTEXT_FILE))
+    _CONTEXT_CACHE["key"] = (now, key)
+    return key
+
+
+def invalidate_context_cache() -> None:
+    _CONTEXT_CACHE.pop("key", None)
+
+
 def load_voice_context_data() -> dict[str, dict[str, int]]:
+    key = context_cache_key()
+    cached = _CONTEXT_CACHE.get("data")
+    if cached and cached[0] == key:
+        terms, phrases = cached[1]
+        return {"terms": dict(terms), "phrases": dict(phrases)}
     merged_terms: dict[str, int] = {}
     merged_phrases: dict[str, int] = {}
     for path in (CONTEXT_FILE, LOCAL_CONTEXT_FILE):
         try:
-            if not path.exists():
+            data = read_json_cached(path)
+            if data is None:
                 continue
-            data = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 continue
             terms = data.get("terms", {})
@@ -1371,6 +1550,7 @@ def load_voice_context_data() -> dict[str, dict[str, int]]:
                         merged_phrases[clean] = max(merged_phrases.get(clean, 0), int(value))
         except Exception as exc:
             log(f"voice context load skipped | path={path.name} | {type(exc).__name__}: {exc}")
+    _CONTEXT_CACHE["data"] = (key, (dict(merged_terms), dict(merged_phrases)))
     return {"terms": merged_terms, "phrases": merged_phrases}
 
 
@@ -1418,6 +1598,7 @@ def save_voice_context_data(terms: dict[str, int], phrases: dict[str, int]) -> N
             json.dumps({"terms": sorted_terms, "phrases": sorted_phrases}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        invalidate_context_cache()
     except Exception as exc:
         log(f"voice context save error: {type(exc).__name__}: {exc}")
 
@@ -1469,6 +1650,16 @@ def configured_context_phrases() -> list[str]:
 
 
 def context_phrases(limit: int = 80) -> list[str]:
+    key = ("phrases", limit, context_cache_key())
+    cached = _CONTEXT_CACHE.get(f"phrases{limit}")
+    if cached and cached[0] == key:
+        return list(cached[1])
+    merged = _context_phrases_uncached(limit)
+    _CONTEXT_CACHE[f"phrases{limit}"] = (key, tuple(merged))
+    return merged
+
+
+def _context_phrases_uncached(limit: int) -> list[str]:
     if not bool(load_settings().get("enable_context_memory", True)):
         return []
     learned = load_voice_phrases()
@@ -1487,6 +1678,16 @@ def context_phrases(limit: int = 80) -> list[str]:
 
 
 def context_terms(limit: int = 80) -> list[str]:
+    key = ("terms", limit, context_cache_key())
+    cached = _CONTEXT_CACHE.get(f"terms{limit}")
+    if cached and cached[0] == key:
+        return list(cached[1])
+    merged = _context_terms_uncached(limit)
+    _CONTEXT_CACHE[f"terms{limit}"] = (key, tuple(merged))
+    return merged
+
+
+def _context_terms_uncached(limit: int) -> list[str]:
     if not bool(load_settings().get("enable_context_memory", True)):
         return []
     learned = load_voice_context()
@@ -1503,14 +1704,24 @@ def context_terms(limit: int = 80) -> list[str]:
     return merged
 
 
+def context_term_patterns() -> list[tuple[str, re.Pattern[str], str]]:
+    terms = context_terms()
+    cached = _CONTEXT_CACHE.get("term_patterns")
+    if cached and cached[0] == terms:
+        return cached[1]
+    patterns = [
+        (term.lower(), re.compile(r"\b" + re.escape(term) + r"\b", re.IGNORECASE), term)
+        for term in terms
+        if context_term_allowed(term) and len(term) >= 2
+    ]
+    _CONTEXT_CACHE["term_patterns"] = (terms, patterns)
+    return patterns
+
+
 def apply_context_terms(text: str) -> str:
-    for term in context_terms():
-        if not context_term_allowed(term):
-            continue
-        if len(term) < 2:
-            continue
-        pattern = r"\b" + re.escape(term) + r"\b"
-        text = re.sub(pattern, term, text, flags=re.IGNORECASE)
+    for lower_term, pattern, term in context_term_patterns():
+        if lower_term in text.lower():
+            text = pattern.sub(term, text)
     return text
 
 
@@ -1614,6 +1825,24 @@ def whisper_initial_prompt() -> str:
     if extras:
         return f"{base} {' '.join(extras)}"
     return base
+
+
+# Cau Whisper hay "bia" khi gap tieng on / im lang (hoc tu phu de YouTube). Chi loc tren ket qua Whisper:
+# Google khong bia cau, va anh co the that su doc "dang ky kenh" khi viet noi dung.
+_WHISPER_HALLUCINATION = re.compile(
+    r"subscribe|ghi\u1ec1n m\u00ec g\u00f5|la la school|kh\u00f4ng b\u1ecf l\u1ee1 nh\u1eefng video|"
+    r"c\u1ea3m \u01a1n c\u00e1c b\u1ea1n \u0111\u00e3 (theo d\u00f5i|xem)|"
+    r"h\u1eb9n g\u1eb7p l\u1ea1i c\u00e1c b\u1ea1n|like v\u00e0 share|b\u1ea5m chu\u00f4ng",
+    re.IGNORECASE,
+)
+
+
+def strip_whisper_hallucinations(text: str) -> str:
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    kept = [sentence for sentence in sentences if not _WHISPER_HALLUCINATION.search(sentence)]
+    if len(kept) != len(sentences):
+        log(f"whisper hallucination removed | text={text[:120]}")
+    return " ".join(kept).strip()
 
 
 def cleanup_pass(text: str) -> str:
@@ -1986,15 +2215,10 @@ class MicIconApp:
         self.active_session_id = 0
         self.auto_was_down = False
         self.mouse_down_had_alt = False
-        self.armed_target_hwnd = 0
-        self.armed_target_point: tuple[int, int] | None = None
-        self.armed_at = 0.0
         self.microphone_device_index, self.microphone_device_name = select_microphone_device(self.settings)
         self.voice_targets = load_voice_targets()
         self.escape_was_down = key_down(VK_ESCAPE)
         self.last_auto_started_at = 0.0
-        self._auto_listen_triggered = False
-        self._auto_click_token = 0
         self._alt_click_token = 0
         self.discard_session_id = 0
         self.last_transcript_whisper_only = False
@@ -2003,6 +2227,8 @@ class MicIconApp:
         self.voice_chat_hotkey_was_down = False
         self.command_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice-command")
         self._alt_click_triggered = False
+        self._alt_click_probing = False
+        self.learn_lock = threading.Lock()
         self.recognizer = sr.Recognizer()
         self.recognizer.operation_timeout = GOOGLE_RECOGNITION_TIMEOUT_SECONDS
         self.google_confidence_scores: list[float] = []
@@ -2021,7 +2247,7 @@ class MicIconApp:
         else:
             log("whisper disabled by settings; google speech recognition only")
         log(
-            f"app started | build={APP_BUILD} | auto_start={AUTO_START_FROM_CHAT_CLICK} | "
+            f"app started | version={APP_VERSION} | build={APP_BUILD} | "
             f"trigger=Alt+left-click | mic_index={self.microphone_device_index} | mic={self.microphone_device_name} | "
             f"whisper={self.enable_whisper_fallback}:{self.whisper_model_name}:{self.whisper_compute_type}"
         )
@@ -2122,6 +2348,24 @@ class MicIconApp:
         self.keep_topmost()
         self.check_for_updates_on_start()
         self.root.after(60_000, self.unload_idle_whisper)
+        self.root.after(4000, self.prefetch_voice_brain)
+
+    def prefetch_voice_brain(self) -> None:
+        """Do san bo nao AI cho che do "Noi" o nen, bam "Noi" la chao ngay."""
+        preference = str(self.settings.get("voice_chat_backend") or "auto")
+        ollama_model = str(self.settings.get("voice_chat_ollama_model") or "")
+        voice = str(self.settings.get("voice_chat_voice") or "")
+        rate = str(self.settings.get("voice_chat_rate") or "")
+
+        def worker() -> None:
+            try:
+                from reader.assistant import prefetch_brain
+
+                prefetch_brain(preference, ollama_model, voice, rate)
+            except Exception as exc:
+                log(f"voice brain prefetch error: {type(exc).__name__}: {exc}")
+
+        threading.Thread(target=worker, daemon=True, name="brain-prefetch-import").start()
 
     def settings_value(self, key: str, default: object) -> object:
         try:
@@ -2181,8 +2425,8 @@ class MicIconApp:
                 log("auto update skipped: manifest missing zip_url")
                 return
             zip_url = resolve_update_url(manifest_url, zip_url_value)
-            update_dir = Path(tempfile.gettempdir()) / "VietnameseVoiceMic-update"
-            zip_path = update_dir / "VietnameseVoiceMic-windows.zip"
+            update_dir = Path(tempfile.gettempdir()) / "VoiNoi-update"
+            zip_path = update_dir / "VoiNoi-windows.zip"
             log(f"auto update downloading | version={remote_version} | url={zip_url}")
             download_update_zip(zip_url, zip_path)
             expected_sha = str(manifest.get("sha256", "") or "").strip().lower()
@@ -2297,35 +2541,6 @@ class MicIconApp:
             log(f"hotkey monitor error: {type(exc).__name__}: {exc}")
         self.root.after(35, self.monitor_voice_hotkeys)
 
-    def current_text_target(self) -> tuple[int, tuple[int, int]] | None:
-        hwnd = foreground_window()
-        if not hwnd or hwnd in {self.app_hwnd, self.hud_hwnd}:
-            return None
-        caret_rect = get_caret_screen_rect(hwnd)
-        if caret_rect:
-            return hwnd, rect_center(caret_rect)
-
-        point = cursor_position()
-        has_uia_text_input, uia_details = uia_is_likely_input(point)
-        browser_bottom = is_browser_bottom_input(hwnd, point) and point_in_strict_chat_zone(point, hwnd)
-        if has_uia_text_input or browser_bottom:
-            log(
-                f"hotkey target from cursor | hwnd={hwnd} | point={point} | "
-                f"browser_bottom={browser_bottom} | uia={uia_details}"
-            )
-            return hwnd, point
-        return None
-
-    def current_armed_target(self) -> tuple[int, tuple[int, int]] | None:
-        if not self.armed_target_hwnd or not self.armed_target_point:
-            return None
-        if time.monotonic() - self.armed_at > ARM_TARGET_SECONDS:
-            self.armed_target_hwnd = 0
-            self.armed_target_point = None
-            self.armed_at = 0.0
-            return None
-        return self.armed_target_hwnd, self.armed_target_point
-
     def is_near_learned_target(self, hwnd: int, point: tuple[int, int]) -> bool:
         key = stable_target_key(hwnd, point)
         if key in self.voice_targets:
@@ -2381,59 +2596,6 @@ class MicIconApp:
         beep_async("stop")
         log(f"stop requested | reason={reason} | session={self.active_session_id}")
 
-    def try_voice_hotkey(self) -> None:
-        if self.listening:
-            self.request_stop("hotkey")
-            return
-        if self.processing:
-            log(f"hotkey ignored: session processing | hotkey={VOICE_HOTKEY_NAME}")
-            return
-        self.try_hotkey_listen()
-
-    def try_hotkey_listen(self) -> None:
-        if self.listening or self.processing:
-            return
-        now = time.monotonic()
-        armed_target = self.current_armed_target()
-        if not armed_target and now - self.last_auto_started_at < AUTO_CLICK_COOLDOWN_SECONDS:
-            log(f"hotkey ignored: cooldown without armed target | hotkey={VOICE_HOTKEY_NAME}")
-            return
-        target = armed_target or self.current_text_target()
-        if not target:
-            log(f"hotkey ignored: no focused text target | hotkey={VOICE_HOTKEY_NAME}")
-            return
-        target_hwnd, target_point = target
-        self.last_auto_started_at = now
-        self.start_listening(auto_stop_after_phrase=True, target_hwnd=target_hwnd, target_point=target_point)
-        self.armed_target_hwnd = 0
-        self.armed_target_point = None
-        self.armed_at = 0.0
-        log(f"hotkey listen armed | hotkey={VOICE_HOTKEY_NAME} | hwnd={target_hwnd} | point={target_point}")
-
-    def choose_keyboard_mode(self, vk: int) -> None:
-        target = self.current_armed_target()
-        if target:
-            target_hwnd, target_point = target
-            self.erase_activation_key(target_hwnd, target_point)
-        self.armed_target_hwnd = 0
-        self.armed_target_point = None
-        self.armed_at = 0.0
-        self.show_hud("done", "Nh\u1eadp b\u00e0n ph\u00edm", 900)
-        log(f"keyboard mode selected | vk={vk}")
-
-    def erase_activation_key(self, target_hwnd: int, target_point: tuple[int, int]) -> None:
-        try:
-            user32.SetCursorPos(target_point[0], target_point[1])
-            time.sleep(0.02)
-            user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-            time.sleep(0.04)
-            keybd(VK_BACK)
-            time.sleep(0.02)
-            keybd(VK_BACK, KEYEVENTF_KEYUP)
-        except Exception as exc:
-            log(f"activation key erase error: {type(exc).__name__}: {exc}")
-
     def try_alt_click_listen_from_click(self, point: tuple[int, int]) -> None:
         conversation = self.conversation
         if conversation is not None and conversation.active and not self.listening:
@@ -2472,152 +2634,75 @@ class MicIconApp:
             )
 
     def maybe_start_alt_click_listen(self, hwnd: int, point: tuple[int, int], token: int) -> None:
+        """Do xem cho vua click co phai o nhap chu khong. Phan do cham (UI Automation) chay o luong phu."""
         if token != self._alt_click_token:
             return
-        if self.listening or self.processing or getattr(self, "_alt_click_triggered", False):
+        if self.listening or self.processing or self._alt_click_triggered or self._alt_click_probing:
             return
-
         focused_hwnd = foreground_window()
         target_hwnd = focused_hwnd if focused_hwnd and focused_hwnd not in {self.app_hwnd, self.hud_hwnd} else hwnd
-        caret_rect = get_caret_screen_rect(target_hwnd)
-        has_uia_text_input, uia_details = uia_is_likely_input(point)
-        has_text_caret = bool(caret_rect and point_near_rect(point, caret_rect, CARET_CLICK_RADIUS))
         near_learned_target = self.is_near_learned_target(target_hwnd, point)
         strict_chat = point_in_strict_chat_zone(point, target_hwnd)
         browser_bottom = is_browser_bottom_input(target_hwnd, point) and strict_chat
-
-        if not has_uia_text_input and not has_text_caret and not near_learned_target and not browser_bottom:
-            log(
-                f"alt-click ignored | hwnd={target_hwnd} | point={point} | "
-                f"strict={strict_chat} | caret={caret_rect} | uia={uia_details}"
-            )
+        if near_learned_target or browser_bottom:
+            # o da hoc / day cua so trinh duyet: khong can hoi UI Automation, nghe ngay
+            reason = "learned-zone" if near_learned_target else "browser-bottom"
+            self.begin_alt_click_listen(target_hwnd, point, reason, "skipped")
             return
 
-        target_point = point
-        reason = (
-            "uia-edit" if has_uia_text_input
-            else "caret" if has_text_caret
-            else "learned-zone" if near_learned_target
-            else "browser-bottom"
-        )
+        self._alt_click_probing = True
+
+        def probe() -> None:
+            caret_rect = None
+            has_uia_text_input, uia_details = False, ""
+            try:
+                caret_rect = get_caret_screen_rect(target_hwnd)
+                has_uia_text_input, uia_details = uia_probe(point)
+            except Exception as exc:
+                uia_details = f"probe-error={type(exc).__name__}"
+            self.root.after(0, lambda: finish(caret_rect, has_uia_text_input, uia_details))
+
+        def finish(caret_rect: tuple[int, int, int, int] | None, has_uia_text_input: bool, uia_details: str) -> None:
+            self._alt_click_probing = False
+            if token != self._alt_click_token or self.listening or self.processing or self._alt_click_triggered:
+                return
+            has_text_caret = bool(caret_rect and point_near_rect(point, caret_rect, CARET_CLICK_RADIUS))
+            if not has_uia_text_input and not has_text_caret:
+                log(
+                    f"alt-click ignored | hwnd={target_hwnd} | point={point} | "
+                    f"strict={strict_chat} | caret={caret_rect} | uia={uia_details}"
+                )
+                return
+            self.begin_alt_click_listen(target_hwnd, point, "uia-edit" if has_uia_text_input else "caret", uia_details)
+
+        threading.Thread(target=probe, daemon=True, name="alt-click-probe").start()
+
+    def begin_alt_click_listen(self, target_hwnd: int, point: tuple[int, int], reason: str, details: str = "") -> None:
         self._alt_click_triggered = True
-        self.armed_target_hwnd = 0
-        self.armed_target_point = None
-        self.armed_at = 0.0
+        self._alt_click_token += 1  # bo cac lan do con xep hang
         self.last_auto_started_at = time.monotonic()
-        self.pin_voice_target(target_hwnd, target_point)
-        self.start_listening(auto_stop_after_phrase=True, target_hwnd=target_hwnd, target_point=target_point)
-        log(
-            f"alt-click listen started: {reason} | hwnd={target_hwnd} | "
-            f"point={point} | paste_point={target_point} | uia={uia_details} | caret={caret_rect}"
-        )
+        self.pin_voice_target(target_hwnd, point)
+        self.start_listening(auto_stop_after_phrase=True, target_hwnd=target_hwnd, target_point=point)
+        log(f"alt-click listen started: {reason} | hwnd={target_hwnd} | point={point} | uia={details}")
 
-    def try_auto_listen_from_click(self, point: tuple[int, int]) -> None:
-        if ALT_CLICK_ONLY:
-            return
+    def start_dictation_from_radial(self, point: tuple[int, int]) -> None:
+        """Anh da chon "Go chu" tren vong tron nghia la cho vua Alt+click la o nhap: nghe ngay, khong do lai.
+        (Ban cu do lai bang UI Automation ngay luc vong tron con tren man hinh: do nham chinh vong tron,
+        treo giao dien 2-15 giay va co luc bo qua luon.)"""
         if self.listening:
+            self.request_stop("alt-click")
             return
         if self.processing:
+            self.show_hud("busy", "Đang nhận diện...", 1200)
+            log(f"radial dictation ignored: session processing | point={point}")
             return
-        if not HIDE_FLOATING_MIC_BUTTON and self.point_inside_icon(*point):
+        hwnd = self.radial_target_hwnd
+        if not hwnd or not window_exists(hwnd):
+            hwnd = foreground_window()
+        if not hwnd or hwnd in {self.app_hwnd, self.hud_hwnd, self.particle_hwnd, self.radial_hwnd}:
+            log(f"radial dictation ignored: no target window | point={point}")
             return
-        now = time.monotonic()
-        if now - self.last_auto_started_at < AUTO_CLICK_COOLDOWN_SECONDS:
-            return
-
-        hwnd = foreground_window()
-        if not hwnd or hwnd in {self.app_hwnd, self.hud_hwnd}:
-            return
-
-        self.last_target_hwnd = hwnd
-        self._auto_listen_triggered = False
-        self._auto_click_token += 1
-        token = self._auto_click_token
-        for delay in CLICK_DETECT_RETRY_MS:
-            self.root.after(
-                delay,
-                lambda original_hwnd=hwnd, original_point=point, click_token=token:
-                    self.maybe_start_auto_listen(original_hwnd, original_point, click_token),
-            )
-
-    def maybe_start_auto_listen(self, hwnd: int, point: tuple[int, int], token: int) -> None:
-        if token != self._auto_click_token:
-            return
-        if self.listening or self.processing or self.armed_target_point == point:
-            return
-        # Early-exit: if a previous retry already triggered for this click, skip
-        if getattr(self, "_auto_listen_triggered", False):
-            return
-        focused_hwnd = foreground_window()
-        target_hwnd = focused_hwnd if focused_hwnd and focused_hwnd != self.app_hwnd else hwnd
-
-        caret_rect = get_caret_screen_rect(target_hwnd)
-        has_uia_text_input, uia_details = uia_is_likely_input(point)
-        has_text_caret = bool(caret_rect and point_near_rect(point, caret_rect, CARET_CLICK_RADIUS))
-        near_learned_target = self.is_near_learned_target(target_hwnd, point)
-        looks_like_bottom_chat = point_in_bottom_chat_zone(point, target_hwnd)
-        looks_like_chat_hint = point_in_chat_hint_zone(point, target_hwnd)
-        looks_like_strict_chat = point_in_strict_chat_zone(point, target_hwnd)
-        # Fallback: click Ä‘Ã¡y Chrome/Electron â†’ kháº£ nÄƒng cao lÃ  Ã´ chat
-        browser_bottom = is_browser_bottom_input(target_hwnd, point) and looks_like_strict_chat
-        if not has_uia_text_input and not has_text_caret and not near_learned_target and not browser_bottom:
-            log(
-                f"auto listen ignored | hwnd={target_hwnd} | point={point} | "
-                f"caret={caret_rect} | uia={uia_details}"
-            )
-            return
-
-        self.last_auto_started_at = time.monotonic()
-        reason = (
-            "uia-edit" if has_uia_text_input
-            else "caret" if has_text_caret
-            else "learned-zone" if near_learned_target
-            else "browser-bottom"
-        )
-        if AUTO_START_FROM_CHAT_CLICK:
-            self._auto_listen_triggered = True
-            self.armed_target_hwnd = 0
-            self.armed_target_point = None
-            self.armed_at = 0.0
-            target_point = best_paste_point(point, caret_rect)
-            self.start_listening(auto_stop_after_phrase=True, target_hwnd=target_hwnd, target_point=target_point)
-            log(
-                f"voice target auto-started: {reason} | hwnd={target_hwnd} | point={point} | paste_point={target_point} | "
-                f"bottom={looks_like_bottom_chat} | strict={looks_like_strict_chat} | "
-                f"hint={looks_like_chat_hint} | uia={uia_details} | caret={caret_rect}"
-            )
-            return
-
-        self.arm_voice_target(target_hwnd, best_paste_point(point, caret_rect), reason, caret_rect)
-        self.show_hud("armed", "Nh\u1ea5n 1 \u0111\u1ec3 n\u00f3i, 2 \u0111\u1ec3 nh\u1eadp tay", 6000)
-        log(
-            f"voice target waiting for choice | hwnd={target_hwnd} | point={point} | "
-            f"strict={looks_like_strict_chat} | uia={uia_details}"
-        )
-
-    def start_armed_voice_target(self) -> None:
-        target = self.current_armed_target()
-        if not target or self.listening or self.processing:
-            return
-        target_hwnd, target_point = target
-        self.armed_target_hwnd = 0
-        self.armed_target_point = None
-        self.armed_at = 0.0
-        self.start_listening(auto_stop_after_phrase=True, target_hwnd=target_hwnd, target_point=target_point)
-
-    def arm_voice_target(
-        self,
-        target_hwnd: int,
-        target_point: tuple[int, int],
-        reason: str,
-        caret_rect: tuple[int, int, int, int] | None,
-    ) -> None:
-        self.armed_target_hwnd = target_hwnd
-        self.armed_target_point = target_point
-        self.armed_at = time.monotonic()
-        self.draw("armed")
-        self.show_hud("armed", "Nh\u1ea5n 1 \u0111\u1ec3 n\u00f3i, 2 \u0111\u1ec3 nh\u1eadp tay", 6000)
-        log(f"voice target armed: {reason} | hwnd={target_hwnd} | point={target_point} | caret={caret_rect}")
+        self.begin_alt_click_listen(hwnd, point, "radial")
 
     def animate(self) -> None:
         if self.visual_state in {"armed", "listen", "busy", "error"}:
@@ -3081,48 +3166,37 @@ class MicIconApp:
             threading.Thread(target=self.capture_target_click_worker, daemon=True).start()
         threading.Thread(target=self.listen_worker, args=(auto_stop_after_phrase, self.active_session_id), daemon=True).start()
 
-    def refresh_microphone_device(self, session_id: int = 0) -> tuple[int | None, str]:
-        index, name = select_microphone_device(self.settings)
-        if index != self.microphone_device_index or name != self.microphone_device_name:
-            log(
-                f"mic reselected | session={session_id} | "
-                f"old_index={self.microphone_device_index} | old_name={self.microphone_device_name} | "
-                f"new_index={index} | new_name={name}"
-            )
-            self.microphone_device_index = index
-            self.microphone_device_name = name
-        return index, name
-
-    def open_microphone_source(self, session_id: int) -> tuple[sr.Microphone, int | None, str]:
+    def open_microphone_source(self, session_id: int) -> tuple[FastMicSource, int | None, str]:
         last_error: Exception | None = None
-        for attempt, (index, name) in enumerate(microphone_device_candidates(self.settings), start=1):
-            source = sr.Microphone(device_index=index)
-            try:
-                source.__enter__()
-            except Exception as exc:
-                last_error = exc
-                log(
-                    f"mic open failed | session={session_id} | attempt={attempt} | "
-                    f"index={index} | name={name} | {type(exc).__name__}: {exc}"
-                )
+        names = AUDIO_DEVICES.refresh(max_age=MIC_DEVICE_MAX_AGE_SECONDS)
+        attempt = 0
+        for round_index in range(2):
+            if round_index == 1:
+                # mic vua cam/rut: liet ke lai thiet bi roi thu lai mot luot
+                log(f"mic devices re-scanned after open failure | session={session_id}")
+                names = AUDIO_DEVICES.refresh(force=True)
+            for index, name in microphone_device_candidates(self.settings, names):
+                attempt += 1
                 try:
-                    source.__exit__(None, None, None)
-                except Exception:
-                    pass
-                time.sleep(0.18)
-                continue
-
-            if index != self.microphone_device_index or name != self.microphone_device_name:
-                log(
-                    f"mic reselected | session={session_id} | "
-                    f"old_index={self.microphone_device_index} | old_name={self.microphone_device_name} | "
-                    f"new_index={index} | new_name={name}"
-                )
-                self.microphone_device_index = index
-                self.microphone_device_name = name
-            if attempt > 1:
-                log(f"mic recovered | session={session_id} | attempt={attempt} | index={index} | name={name}")
-            return source, index, name
+                    source = AUDIO_DEVICES.open(index)
+                except Exception as exc:
+                    last_error = exc
+                    log(
+                        f"mic open failed | session={session_id} | attempt={attempt} | "
+                        f"index={index} | name={name} | {type(exc).__name__}: {exc}"
+                    )
+                    continue
+                if index != self.microphone_device_index or name != self.microphone_device_name:
+                    log(
+                        f"mic reselected | session={session_id} | "
+                        f"old_index={self.microphone_device_index} | old_name={self.microphone_device_name} | "
+                        f"new_index={index} | new_name={name}"
+                    )
+                    self.microphone_device_index = index
+                    self.microphone_device_name = name
+                if attempt > 1:
+                    log(f"mic recovered | session={session_id} | attempt={attempt} | index={index} | name={name}")
+                return source, index, name
 
         if last_error:
             raise OSError(f"no microphone could be opened; last error: {type(last_error).__name__}: {last_error}")
@@ -3134,7 +3208,7 @@ class MicIconApp:
         try:
             yield source, index, name
         finally:
-            source.__exit__(None, None, None)
+            AUDIO_DEVICES.close(source)
 
     def capture_target_click_worker(self) -> None:
         was_down = left_button_down()
@@ -3255,68 +3329,121 @@ class MicIconApp:
         end_byte -= end_byte % width
         return sr.AudioData(audio.frame_data[start_byte:end_byte], audio.sample_rate, audio.sample_width)
 
-    def _transcribe_google_resilient(self, audio: sr.AudioData, label: str, depth: int = 0) -> str:
+    def _transcribe_google_attempt(self, audio: sr.AudioData, label: str, attempt: int) -> str:
         duration = self._audio_duration_seconds(audio)
-        last_error: Exception | None = None
-        for attempt in range(1, GOOGLE_CHUNK_RETRY_ATTEMPTS + 1):
-            try:
-                text = self._transcribe_google_once(audio).strip()
-                if text:
-                    return text
-                log(f"google {label} empty | attempt={attempt} | duration={duration:.1f}s")
-                last_error = sr.UnknownValueError()
-            except sr.UnknownValueError as exc:
-                last_error = exc
-                log(f"google {label} unrecognized | attempt={attempt} | duration={duration:.1f}s")
-            except Exception as exc:
-                last_error = exc
-                log(f"google {label} error | attempt={attempt} | duration={duration:.1f}s | {type(exc).__name__}: {exc}")
-            if attempt < GOOGLE_CHUNK_RETRY_ATTEMPTS:
-                time.sleep(0.25 * attempt)
+        try:
+            text = self._transcribe_google_once(audio).strip()
+        except sr.UnknownValueError:
+            log(f"google {label} unrecognized | attempt={attempt} | duration={duration:.1f}s")
+            raise
+        except Exception as exc:
+            log(f"google {label} error | attempt={attempt} | duration={duration:.1f}s | {type(exc).__name__}: {exc}")
+            raise
+        if not text:
+            log(f"google {label} empty | attempt={attempt} | duration={duration:.1f}s")
+            raise sr.UnknownValueError()
+        return text
 
-        if duration <= GOOGLE_MIN_RETRY_CHUNK_SECONDS or depth >= 2:
-            if last_error:
-                raise last_error
-            return ""
+    def _transcribe_google_resilient(self, audio: sr.AudioData, label: str, depth: int = 0) -> str:
+        """Google tra ve khong on dinh: gui lai y nguyen thuong ra chu (~40% lan theo log).
 
+        Ban cu thu lai roi chia doi TUAN TU (toi da 14 lan goi, 10-15 giay cho mot doan hong). Gio lan hai
+        chay SONG SONG: gui lai ca doan + hai nua doan cung luc, lay ket qua tot nhat (~2 lan goi mang)."""
+        try:
+            return self._transcribe_google_attempt(audio, label, 1)
+        except Exception as exc:
+            first_error = exc
+
+        duration = self._audio_duration_seconds(audio)
         midpoint = len(audio.frame_data) // 2
         midpoint -= midpoint % max(1, audio.sample_width)
-        if midpoint <= 0 or midpoint >= len(audio.frame_data):
-            if last_error:
-                raise last_error
-            return ""
+        can_split = depth == 0 and duration > GOOGLE_MIN_RETRY_CHUNK_SECONDS and 0 < midpoint < len(audio.frame_data)
+        if not isinstance(first_error, sr.UnknownValueError):
+            time.sleep(0.25)  # loi mang: nghi mot nhip roi moi gui lai
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="google-retry")
+        try:
+            retry = executor.submit(self._transcribe_google_attempt, audio, label, 2)
+            halves = []
+            if can_split:
+                log(f"google {label} retry + split in parallel | duration={duration:.1f}s")
+                halves = [
+                    executor.submit(self._transcribe_google_attempt, self._slice_audio(audio, 0, midpoint), f"{label}a", 1),
+                    executor.submit(
+                        self._transcribe_google_attempt,
+                        self._slice_audio(audio, midpoint, len(audio.frame_data)),
+                        f"{label}b",
+                        1,
+                    ),
+                ]
+            try:
+                return retry.result()
+            except Exception as exc:
+                last_error: Exception = exc
+            if halves:
+                parts: list[str] = []
+                for future in halves:
+                    try:
+                        parts.append(future.result())
+                    except Exception as exc:
+                        last_error = exc
+                        parts = []
+                        break
+                if parts:
+                    log(f"google {label} recovered from halves")
+                    return clean_transcript(" ".join(parts))
+        finally:
+            executor.shutdown(wait=False)  # co ket qua roi thi khong doi cac luot con lai
+        raise last_error
 
-        log(f"google {label} splitting after failure | duration={duration:.1f}s")
-        left = self._slice_audio(audio, 0, midpoint)
-        right = self._slice_audio(audio, midpoint, len(audio.frame_data))
-        parts = [
-            self._transcribe_google_resilient(left, f"{label}a", depth + 1),
-            self._transcribe_google_resilient(right, f"{label}b", depth + 1),
-        ]
-        return clean_transcript(" ".join(part for part in parts if part.strip()))
+    def _recover_chunk_with_whisper(
+        self, chunk_audio: sr.AudioData, index: int, total: int, speech_level: int
+    ) -> tuple[str, str]:
+        """Google bo sot doan nay: cho Whisper nghe lai rieng doan do, tru khi doan do chi la im lang.
 
-    def _recover_chunk_with_whisper(self, chunk_audio: sr.AudioData, index: int, total: int, speech_level: int) -> str:
-        """Google bo sot doan nay: cho Whisper nghe lai rieng doan do, tru khi doan do chi la im lang."""
-        self.ensure_whisper(wait=60)
-        if self.whisper_model is None:
-            return ""
+        Tra ve (chu, trang thai); trang thai "quiet" = doan chi co tieng on, khong tinh la mat chu."""
         duration = self._audio_duration_seconds(chunk_audio)
         level = audio_speech_level(chunk_audio)
         if level < max(120, speech_level * 0.45):
             log(f"whisper chunk {index}/{total} skipped: quiet | level={level} | speech_level={speech_level}")
-            return ""
+            return "", "quiet"
+        self.ensure_whisper(wait=60)
+        if self.whisper_model is None:
+            return "", "unavailable"
         try:
             text = self._transcribe_whisper(chunk_audio, vad=True).strip()
         except Exception as exc:
             log(f"whisper chunk {index}/{total} failed | {type(exc).__name__}: {exc}")
-            return ""
+            return "", "failed"
         words = count_transcript_words(text)
         wpm = words / max(0.1, duration / 60)
         if not text or wpm < 30 or wpm > 330:
             log(f"whisper chunk {index}/{total} rejected | wpm={wpm:.0f} | text={text[:60]}")
-            return ""
+            return "", "rejected"
         log(f"whisper chunk {index}/{total} recovered | chars={len(text)} | text={text[:80]}")
-        return text
+        return text, "whisper"
+
+    def _fill_low_coverage_chunk(
+        self, chunk_audio: sr.AudioData, google_text: str, index: int, total: int, speech_level: int
+    ) -> str:
+        """Google hay lam roi mat vai cau o dau doan (tra ve 13 chu cho 8 giay noi). Doan nao qua it chu so voi
+        do dai thi cho Whisper nghe rieng doan do va lay ban day du hon. Chi ton them vai giay cho dung doan do."""
+        duration = self._audio_duration_seconds(chunk_audio)
+        google_words = count_transcript_words(google_text)
+        google_wpm = google_words / max(0.1, duration / 60)
+        if (
+            not self.enable_whisper_fallback
+            or duration < LOW_COVERAGE_MIN_CHUNK_SECONDS
+            or google_wpm >= float(self.settings_value("low_coverage_wpm", LOW_COVERAGE_WPM) or 0)
+            or audio_speech_level(chunk_audio) < max(120, speech_level * 0.6)
+        ):
+            return google_text
+        log(f"google chunk {index}/{total} low coverage | wpm={google_wpm:.0f} | words={google_words} | checking whisper")
+        whisper_text, _status = self._recover_chunk_with_whisper(chunk_audio, index, total, speech_level)
+        whisper_words = count_transcript_words(whisper_text)
+        if whisper_text and whisper_words >= google_words * 1.3 + 2:
+            log(f"google chunk {index}/{total} filled by whisper | google={google_words} | whisper={whisper_words} words")
+            return whisper_text
+        return google_text
 
     def _transcribe_google_chunked(self, audio: sr.AudioData) -> str:
         chunks = google_audio_chunks(audio)
@@ -3330,17 +3457,25 @@ class MicIconApp:
                 f"range={start_sec:.1f}-{end_sec:.1f}s | duration={self._audio_duration_seconds(chunk_audio):.1f}s"
             )
 
+        speech_level = audio_speech_level(audio)
+
         def transcribe_chunk(item: tuple[int, sr.AudioData, float, float]) -> tuple[int, str, str]:
             index, chunk_audio, _start_sec, _end_sec = item
             try:
                 chunk_text = self._transcribe_google_resilient(chunk_audio, f"chunk {index}/{total}").strip()
                 if chunk_text:
-                    return index, chunk_text, "ok"
-                return index, "", "empty"
+                    return index, self._fill_low_coverage_chunk(chunk_audio, chunk_text, index, total, speech_level), "ok"
+                status = "empty"
             except sr.UnknownValueError:
-                return index, "", "unrecognized"
+                status = "unrecognized"
             except Exception as exc:
-                return index, "", f"error:{type(exc).__name__}: {exc}"
+                status = f"error:{type(exc).__name__}: {exc}"
+            log(f"google chunk {index}/{total} {status}")
+            # Whisper nghe lai ngay trong luong nay, song song voi cac doan khac (truoc day doi het moi lam)
+            whisper_text, whisper_status = self._recover_chunk_with_whisper(chunk_audio, index, total, speech_level)
+            if whisper_text:
+                return index, whisper_text, "whisper"
+            return index, "", "quiet" if whisper_status == "quiet" else status
 
         parts: list[str] = []
         errors = 0
@@ -3348,20 +3483,22 @@ class MicIconApp:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             results = list(executor.map(transcribe_chunk, chunks))
 
-        chunk_audio_by_index = {index: chunk_audio for index, chunk_audio, _start, _end in chunks}
-        speech_level = audio_speech_level(audio)
         recovered = 0
+        quiet = 0
         for index, chunk_text, status in sorted(results, key=lambda item: item[0]):
-            if chunk_text:
+            if status == "ok":
                 parts.append(chunk_text)
                 log(f"google chunk {index}/{total} ok | chars={len(chunk_text)} | text={chunk_text[:80]}")
                 continue
-            log(f"google chunk {index}/{total} {status}")
-            whisper_text = self._recover_chunk_with_whisper(chunk_audio_by_index[index], index, total, speech_level)
-            if whisper_text:
-                parts.append(whisper_text)
+            if status == "whisper":
+                parts.append(chunk_text)
                 recovered += 1
                 self.google_confidence_scores.append(0.85)
+                continue
+            if status == "quiet":
+                # doan chi co tieng on (thuong la cuoi cau): khong mat chu nao, khong keo tut do tin cay.
+                # Truoc day tinh la 0% -> do tin cay < 82% -> Whisper nghe lai CA doan dai (~18 giay).
+                quiet += 1
                 continue
             errors += 1
             # Missing audio is a real accuracy loss. Count it in the session
@@ -3373,7 +3510,7 @@ class MicIconApp:
         if text:
             log(
                 f"transcribe engine=google-chunked | chunks={len(parts)}/{total} | "
-                f"whisper_recovered={recovered} | errors={errors} | workers={workers} | text={text[:80]}"
+                f"whisper_recovered={recovered} | quiet={quiet} | errors={errors} | workers={workers} | text={text[:80]}"
             )
             return text
         raise sr.UnknownValueError()
@@ -3507,7 +3644,12 @@ class MicIconApp:
                         f"threshold={GOOGLE_LOW_CONFIDENCE_FALLBACK_THRESHOLD * 100:.0f}%"
                     )
         except sr.UnknownValueError:
-            log("google unrecognized; falling back to whisper")
+            voiced = getattr(self, "session_voiced_seconds", 99.0)
+            if voiced < MIN_VOICED_SECONDS_FOR_WHISPER:
+                # chi la tieng dong (go phim, click chuot): Whisper se mat ~5-9 giay roi cung chi doan bua
+                log(f"google unrecognized; too little voice for whisper | voiced={voiced:.2f}s")
+                raise
+            log(f"google unrecognized; falling back to whisper | voiced={voiced:.1f}s")
         except Exception as exc:
             log(f"google transcribe error: {type(exc).__name__}: {exc}")
             if duration > GOOGLE_MIN_RETRY_CHUNK_SECONDS:
@@ -3564,7 +3706,9 @@ class MicIconApp:
                         condition_on_previous_text=False,
                         temperature=0,
                     )
-                    whisper_text = clean_transcript(" ".join(segment.text.strip() for segment in segments))
+                    whisper_text = strip_whisper_hallucinations(
+                        clean_transcript(" ".join(segment.text.strip() for segment in segments))
+                    )
                     log(
                         f"faster-whisper language={getattr(info, 'language', 'n/a')} | "
                         f"prob={getattr(info, 'language_probability', 0):.2f} | text={whisper_text[:80]}"
@@ -3596,7 +3740,7 @@ class MicIconApp:
                 elif not result["text"].strip():
                     raise sr.UnknownValueError()
                 whisper_raw = str(result["text"])
-                whisper_text = clean_transcript(whisper_raw)
+                whisper_text = strip_whisper_hallucinations(clean_transcript(whisper_raw))
                 if whisper_text and whisper_text != whisper_raw.strip():
                     log(f"cleanup | raw={whisper_raw[:100]} | clean={whisper_text[:100]}")
                 return whisper_text
@@ -3624,6 +3768,8 @@ class MicIconApp:
         speech_started_at = 0.0
         capture_finished_at = listen_started
         voice_frame_count = 0
+        voiced_frames = 0  # so khung co tieng nguoi that (VAD), de phan biet loi noi voi tieng dong
+        chunk_size = 1024
         sample_rate = 16000
         sample_width = 2
         particle_result_scheduled = False
@@ -3635,6 +3781,7 @@ class MicIconApp:
                 self.recognizer.non_speaking_duration = 0.55
                 sample_rate = source.SAMPLE_RATE
                 sample_width = source.SAMPLE_WIDTH
+                chunk_size = source.CHUNK
                 voice_vad = create_voice_vad(sample_rate, sample_width)
 
                 log(
@@ -3678,6 +3825,10 @@ class MicIconApp:
                         noise_floor + VAD_SOFT_ACTIVITY_MARGIN,
                     )
                     soft_voice = speech_started and rms >= soft_activity_threshold
+                    if (speech_started or start_voice) and (
+                        (bool(vad_voice) and rms >= webrtc_rms_gate) if vad_voice is not None else rms >= speech_threshold
+                    ):
+                        voiced_frames += 1
 
                     if start_voice:
                         voice_frame_count += 1
@@ -3777,12 +3928,14 @@ class MicIconApp:
                 return
 
             t_api = time.monotonic()
+            self.session_voiced_seconds = voiced_frames * chunk_size / max(1, sample_rate)
             self.root.after(0, lambda: self.draw("busy"))
             self.root.after(0, lambda sid=session_id: self.show_hud("busy", f"\u0110ang nh\u1eadn di\u1ec7n #{sid}", None))
             audio = sr.AudioData(b"".join(audio_frames), sample_rate, sample_width)
             log(
                 f"transcribe start | id={session_id} | reason={stop_reason} | "
-                f"frames={len(audio_frames)} | capture_wait={(capture_finished_at - last_activity_at):.2f}s"
+                f"frames={len(audio_frames)} | voiced={self.session_voiced_seconds:.2f}s | "
+                f"capture_wait={(capture_finished_at - last_activity_at):.2f}s"
             )
             save_last_audio(
                 audio,
@@ -3885,10 +4038,11 @@ class MicIconApp:
                 },
             )
             keep_transcript_on_clipboard(final_text, "recognized")
-            learn_context_terms(final_text)
             # Clipboard/focus work does not require Tk. Run it immediately in
             # the worker so an animation-heavy Tk queue cannot delay delivery.
             self.paste_chunk(final_text, target_hwnd, target_point, click_to_focus=True)
+            # hoc tu vung sau khi da dan (truoc day chay truoc, lam chu dan tre ~3 giay)
+            threading.Thread(target=self.learn_after_paste, args=(final_text,), daemon=True).start()
             self.remember_voice_target(target_hwnd, target_point)
             particle_result_scheduled = True
             self.root.after(0, lambda t=final_text, s=stats_text, pt=target_point: self.show_particle_result(t, s, pt, RESULT_SHOW_MS))
@@ -3921,6 +4075,13 @@ class MicIconApp:
             self.processing = False
             self.active_target_hwnd = 0
             self.active_target_point = None
+
+    def learn_after_paste(self, text: str) -> None:
+        try:
+            with self.learn_lock:
+                learn_context_terms(text)
+        except Exception as exc:
+            log(f"context learn error: {type(exc).__name__}: {exc}")
 
     # ------------------------------------------------------------ che do tro chuyen (lenh "voice")
     def voice_command(self, text: str) -> str | None:
@@ -4028,6 +4189,8 @@ class MicIconApp:
         self.draw_radial_menu()
         self.radial.deiconify()
         self.radial.lift()
+        AUDIO_DEVICES.prewarm()  # lam moi danh sach mic trong luc anh dang chon o
+        self.prefetch_voice_brain()  # co san trong cache thi khong ton gi
         beep_async("chunk")
         log(f"radial menu open | point={point}")
         if not getattr(self, "radial_animating", False):
@@ -4163,7 +4326,7 @@ class MicIconApp:
         log(f"radial menu choice | choice={choice} | point={point}")
         if choice in (None, "dictation"):
             # giu nguyen: noi thanh chu vao khung chat
-            self.try_alt_click_listen_from_click(point)
+            self.start_dictation_from_radial(point)
         elif choice == "chat":
             self.start_voice_conversation(self.radial_target_hwnd or foreground_window(), point)
         elif choice == "reader":
@@ -4247,15 +4410,12 @@ class MicIconApp:
             self.show_hud("done", "Mở Trợ lý đọc", 900)
             log(f"doc reader focused | hwnd={window}")
             return
-        script = APP_DIR / "doc_reader.py"
-        if not script.exists():
+        if not getattr(sys, "frozen", False) and not (APP_DIR / "doc_reader.py").exists():
             self.show_hud("error", "Không thấy Trợ lý đọc", 1500)
             log("doc reader missing: doc_reader.py")
             return
-        pythonw = Path(sys.executable).with_name("pythonw.exe")
-        executable = str(pythonw if pythonw.exists() else sys.executable)
         subprocess.Popen(
-            [executable, "-X", "utf8", str(script)], cwd=str(APP_DIR),
+            doc_reader_command(), cwd=str(APP_DIR),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         self.show_hud("done", "Đang mở Trợ lý đọc...", 1500)
@@ -4339,6 +4499,12 @@ class MicIconApp:
 
 
 def main() -> int:
+    if "--doc-reader" in sys.argv:
+        # VoiNoi.exe --doc-reader: chay Tro ly doc (ban .exe khong co python rieng de chay doc_reader.py)
+        sys.argv.remove("--doc-reader")
+        import doc_reader
+
+        return doc_reader.main()
     if not acquire_single_instance_lock():
         return 0
     MicIconApp().run()

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 import threading
 import time
 import unicodedata
@@ -12,7 +13,8 @@ from pathlib import Path
 
 from .extract import Block, split_sentences
 
-APP_DIR = Path(__file__).resolve().parent.parent
+# ban .exe: du lieu nam canh VoiNoi.exe (khong phai trong thu muc _internal)
+APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
 DATA_DIR = APP_DIR / "reader-data"
 DOCS_DIR = DATA_DIR / "docs"
 SETTINGS_FILE = DATA_DIR / "settings.json"

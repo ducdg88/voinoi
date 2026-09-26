@@ -25,7 +25,7 @@ try {
 
   $ResolvedAppDir = (Resolve-Path $AppDir).Path
   $ResolvedZip = (Resolve-Path $ZipPath).Path
-  $TempDir = Join-Path ([IO.Path]::GetTempPath()) ("VietnameseVoiceMic-extract-" + [guid]::NewGuid().ToString("N"))
+  $TempDir = Join-Path ([IO.Path]::GetTempPath()) ("VoiNoi-extract-" + [guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
   Expand-Archive -Path $ResolvedZip -DestinationPath $TempDir -Force
 
