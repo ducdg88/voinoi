@@ -139,9 +139,9 @@ releases\VoiNoi-windows.zip
 releases\version.json
 ```
 
-Bản `.exe` không đóng gói Whisper để gọn nhẹ. Tự cập nhật đọc manifest tại
-`https://github.com/ducdg88/voinoi/releases/latest/download/version.json`, nên mỗi bản mới cần tải cả
-`VoiNoi-windows.zip` và `version.json` lên GitHub Release.
+Bản `.exe` không đóng gói Whisper để gọn nhẹ. Repo `ducdg88/voinoi` đang để riêng tư nên tự cập nhật tắt sẵn
+(`auto_update_enabled: false`): app không tải được file từ Release riêng tư. Nếu sau này mở công khai repo, bật lại
+`auto_update_enabled` và mỗi bản mới tải cả `VoiNoi-windows.zip` lẫn `version.json` lên GitHub Release.
 
 ## Xử lý lỗi thường gặp
 

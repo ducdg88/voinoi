@@ -11,7 +11,7 @@
   "particle_effect_count": 180,
   "enable_whisper_fallback": false,
   "whisper_model": "base",
-  "auto_update_enabled": true,
+  "auto_update_enabled": false,
   "update_manifest_url": "https://github.com/ducdg88/voinoi/releases/latest/download/version.json",
   "speech_cleanup_replacements": [
     {
