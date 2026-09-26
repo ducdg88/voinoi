@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trợ lý đọc</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=Literata:opsz,wght@7..72,400;7..72,500;7..72,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23b4532a'/%3E%3Cpath d='M9 10h9a5 5 0 0 1 5 5v7H14a5 5 0 0 1-5-5z' fill='%23fff'/%3E%3C/svg%3E">
+</head>
+<body>
+<div class="app" id="app">
+  <!-- Thu vien -->
+  <aside class="library" id="library">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11a3 3 0 0 1 3 3v13a2.5 2.5 0 0 0-2.5-2.5H4z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H17a3 3 0 0 0-3 3v13a2.5 2.5 0 0 1 2.5-2.5H20z"/></svg>
+      </div>
+      <div>
+        <div class="brand-name">Trợ lý đọc</div>
+        <div class="brand-sub">Nghe tài liệu, ghi chú theo từng câu</div>
+      </div>
+    </div>
+
+    <div class="add-actions">
+      <button class="btn primary block" id="btnOpenFile" title="Mở file txt, md, pdf, docx, html, epub">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Mở file
+      </button>
+      <div class="add-row">
+        <button class="btn soft" id="btnClipboard" title="Đọc nội dung vừa Ctrl+C (chữ, link hoặc đường dẫn file)">Từ clipboard</button>
+        <button class="btn soft" id="btnPaste" title="Dán văn bản, đường dẫn file hoặc link web">Dán / link</button>
+      </div>
+      <input type="file" id="fileInput" multiple hidden accept=".txt,.md,.markdown,.pdf,.docx,.html,.htm,.epub,.csv,.srt,.vtt,.json">
+    </div>
+
+    <div class="lib-head">
+      <span>Tài liệu</span>
+      <span class="lib-count" id="libCount"></span>
+    </div>
+    <div class="lib-list" id="libList"></div>
+
+    <div class="lib-foot">
+      <button class="linkish" id="btnNotesDir" title="Mở thư mục chứa tất cả file ghi chú Markdown">Thư mục ghi chú</button>
+    </div>
+  </aside>
+
+  <!-- Vung doc -->
+  <main class="reader" id="reader">
+    <header class="reader-top">
+      <button class="icon-btn only-narrow" id="btnLibToggle" title="Thư viện" aria-label="Thư viện">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <div class="doc-meta">
+        <h1 class="doc-title" id="docTitle">Chưa mở tài liệu</h1>
+        <div class="doc-source" id="docSource"></div>
+      </div>
+      <div class="doc-actions" id="docActions" hidden>
+        <button class="icon-btn" id="btnSource" title="Mở file hoặc link gốc" aria-label="Mở file gốc">
+          <svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+        </button>
+        <button class="icon-btn" id="btnReload" title="Tải lại nội dung mới nhất (giữ ghi chú)" aria-label="Tải lại">
+          <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+        </button>
+        <button class="icon-btn only-narrow" id="btnNotesToggle" title="Ghi chú" aria-label="Ghi chú">
+          <svg viewBox="0 0 24 24"><path d="M5 4h14v12l-4 4H5z"/><path d="M15 20v-4h4"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="doc-scroll" id="docScroll">
+      <article class="doc" id="doc">
+        <div class="empty" id="empty">
+          <div class="empty-art" aria-hidden="true">
+            <svg viewBox="0 0 120 90"><rect x="8" y="10" width="62" height="74" rx="8"/><path d="M20 28h38M20 40h38M20 52h26"/><circle cx="88" cy="46" r="22"/><path d="M82 36v20l16-10z"/></svg>
+          </div>
+          <h2>Đưa tài liệu vào, tôi đọc cho anh nghe</h2>
+          <p>Kéo thả file vào đây, bấm <b>Mở file</b>, hoặc bôi đen và <kbd>Ctrl</kbd>+<kbd>C</kbd> một đoạn ở bất kỳ đâu rồi bấm <b>Từ clipboard</b>.</p>
+          <ul class="empty-list">
+            <li><b>Định dạng:</b> txt, md (Obsidian), pdf, docx, html, epub, link web, Google Docs công khai.</li>
+            <li><b>Đang nghe mà thắc mắc:</b> bấm <kbd>Q</kbd> để đặt câu hỏi, <kbd>N</kbd> để ghi chú. Nhập bằng giọng nói được luôn.</li>
+            <li><b>Ghi chú lưu thành file Markdown</b>, mở lại hoặc đưa cho Claude đọc và trả lời.</li>
+          </ul>
+        </div>
+      </article>
+    </div>
+
+    <div class="sel-toolbar" id="selToolbar" hidden>
+      <button data-kind="note">Ghi chú đoạn này</button>
+      <button data-kind="question">Hỏi về đoạn này</button>
+      <button data-kind="play">Đọc từ đây</button>
+    </div>
+
+    <!-- Thanh dieu khien -->
+    <footer class="player" id="player">
+      <div class="progress" id="progress" title="Bấm để nhảy tới vị trí">
+        <div class="progress-fill" id="progressFill"></div>
+        <div class="progress-marks" id="progressMarks"></div>
+      </div>
+      <div class="player-row">
+        <div class="transport">
+          <button class="icon-btn" id="btnPrevBlock" title="Đoạn trước (Shift + ←)" aria-label="Đoạn trước">
+            <svg viewBox="0 0 24 24"><path d="M6 5v14M19 5l-9 7 9 7z"/></svg>
+          </button>
+          <button class="icon-btn" id="btnPrev" title="Câu trước (←)" aria-label="Câu trước">
+            <svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+          </button>
+          <button class="play-btn" id="btnPlay" title="Đọc / tạm dừng (Space)" aria-label="Đọc">
+            <svg class="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            <svg class="i-pause" viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>
+            <span class="spinner"></span>
+          </button>
+          <button class="icon-btn" id="btnNext" title="Câu sau (→)" aria-label="Câu sau">
+            <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+          </button>
+          <button class="icon-btn" id="btnNextBlock" title="Đoạn sau (Shift + →)" aria-label="Đoạn sau">
+            <svg viewBox="0 0 24 24"><path d="M18 5v14M5 5l9 7-9 7z"/></svg>
+          </button>
+        </div>
+        <div class="status" id="status">
+          <span id="statusPos">Câu 0/0</span>
+          <span class="dot-sep"></span>
+          <span id="statusLeft"></span>
+        </div>
+        <div class="player-tools">
+          <button class="chip-btn" id="btnNote" title="Ghi chú tại câu đang đọc (N)">
+            <svg viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg> Ghi chú <kbd>N</kbd>
+          </button>
+          <button class="chip-btn accent" id="btnQuestion" title="Đặt câu hỏi tại câu đang đọc (Q)">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01"/></svg> Hỏi <kbd>Q</kbd>
+          </button>
+          <label class="select-wrap" title="Tốc độ đọc">
+            <select id="speed">
+              <option value="0.8">0.8x</option>
+              <option value="0.9">0.9x</option>
+              <option value="1" selected>1x</option>
+              <option value="1.15">1.15x</option>
+              <option value="1.25">1.25x</option>
+              <option value="1.4">1.4x</option>
+              <option value="1.6">1.6x</option>
+              <option value="1.8">1.8x</option>
+              <option value="2">2x</option>
+            </select>
+          </label>
+          <label class="select-wrap" title="Giọng đọc">
+            <select id="voice">
+              <optgroup label="Giọng tiếng Việt">
+                <option value="vi-VN-NamMinhNeural">Nam Minh (nam)</option>
+                <option value="vi-VN-HoaiMyNeural">Hoài My (nữ)</option>
+              </optgroup>
+              <optgroup label="Giọng đa ngữ, đọc tốt từ tiếng Anh xen kẽ">
+                <option value="en-US-AndrewMultilingualNeural">Andrew (nam)</option>
+                <option value="en-US-BrianMultilingualNeural">Brian (nam)</option>
+                <option value="en-US-AvaMultilingualNeural">Ava (nữ)</option>
+                <option value="en-US-EmmaMultilingualNeural">Emma (nữ)</option>
+              </optgroup>
+            </select>
+          </label>
+          <button class="chip-btn" id="btnVoiceTest" title="Nghe thử giọng đang chọn">Nghe thử</button>
+          <button class="icon-btn" id="btnSettings" title="Tuỳ chọn" aria-label="Tuỳ chọn">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="settings-pop" id="settingsPop" hidden>
+        <label class="check"><input type="checkbox" id="optNatural" checked> Đọc liền cả đoạn cho tự nhiên như người đọc (tắt thì đọc từng câu, ra tiếng nhanh hơn)</label>
+        <label class="check"><input type="checkbox" id="optTalk" checked> Trợ lý nói chuyện: chào anh, báo đã nhận tài liệu rồi tự đọc, báo khi đọc xong</label>
+        <label class="check"><input type="checkbox" id="optEnglish" checked> Câu tiếng Anh đọc bằng giọng tiếng Anh</label>
+        <label class="check"><input type="checkbox" id="optResume" checked> Lưu ghi chú xong thì đọc tiếp</label>
+        <label class="check"><input type="checkbox" id="optFollow" checked> Tự cuộn theo câu đang đọc</label>
+        <label class="check"><input type="checkbox" id="optDictate"> Mở ô ghi chú là bật micro luôn (nói xong bấm Ctrl+Enter)</label>
+        <label class="check"><input type="checkbox" id="optSkipLists"> Bỏ qua gạch đầu dòng khi đọc</label>
+        <div class="settings-row">
+          <span>Cỡ chữ</span>
+          <button class="chip-btn" data-font="-1">A-</button>
+          <button class="chip-btn" data-font="1">A+</button>
+        </div>
+        <div class="settings-row">
+          <span>Giao diện</span>
+          <button class="chip-btn" data-theme="auto">Tự động</button>
+          <button class="chip-btn" data-theme="light">Sáng</button>
+          <button class="chip-btn" data-theme="dark">Tối</button>
+        </div>
+        <div class="shortcuts">
+          <div><kbd>Space</kbd> đọc / dừng</div>
+          <div><kbd>←</kbd> <kbd>→</kbd> câu trước / sau</div>
+          <div><kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd> đoạn trước / sau</div>
+          <div><kbd>N</kbd> ghi chú, <kbd>Q</kbd> đặt câu hỏi</div>
+          <div><kbd>R</kbd> đọc lại câu hiện tại</div>
+          <div>Bấm vào câu bất kỳ để đọc từ đó</div>
+        </div>
+      </div>
+    </footer>
+  </main>
+
+  <!-- Ghi chu -->
+  <aside class="notes" id="notes">
+    <div class="notes-head">
+      <div class="notes-title">Ghi chú <span class="lib-count" id="notesCount"></span></div>
+      <div class="seg" id="notesFilter">
+        <button class="on" data-filter="all">Tất cả</button>
+        <button data-filter="question">Câu hỏi chưa rõ</button>
+      </div>
+    </div>
+
+    <form class="composer" id="composer" hidden>
+      <div class="composer-head">
+        <div class="seg small" id="composerKind">
+          <button type="button" data-kind="note" class="on">Ghi chú</button>
+          <button type="button" data-kind="question">Câu hỏi</button>
+        </div>
+        <span class="composer-where" id="composerWhere"></span>
+      </div>
+      <blockquote class="composer-quote" id="composerQuote"></blockquote>
+      <div class="composer-box">
+        <textarea id="composerText" rows="4" placeholder="Nhập hoặc nói nội dung ghi chú..."></textarea>
+        <button type="button" class="mic-btn" id="btnDictate" title="Nói để nhập (tiếng Việt)" aria-label="Nói để nhập">
+          <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        </button>
+      </div>
+      <div class="composer-foot">
+        <span class="hint"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> lưu, <kbd>Esc</kbd> huỷ</span>
+        <div>
+          <button type="button" class="btn ghost" id="btnCancelNote">Huỷ</button>
+          <button type="submit" class="btn primary" id="btnSaveNote">Lưu</button>
+        </div>
+      </div>
+    </form>
+
+    <div class="note-list" id="noteList">
+      <div class="notes-empty" id="notesEmpty">
+        Đang nghe mà có ý hay hoặc chỗ chưa hiểu, bấm <kbd>N</kbd> hoặc <kbd>Q</kbd>. Ghi chú gắn đúng câu đó, bấm vào để nghe lại.
+      </div>
+    </div>
+
+    <div class="notes-foot" id="notesFoot" hidden>
+      <button class="btn soft" id="btnNotesFile" title="Mở thư mục và chọn file ghi chú Markdown của tài liệu này">Mở file ghi chú</button>
+      <button class="btn soft" id="btnCopyForAI" title="Sao chép lời nhắn kèm đường dẫn file để dán cho Claude">Copy để hỏi Claude</button>
+    </div>
+  </aside>
+</div>
+
+<!-- Hop thoai nhap -->
+<div class="modal" id="pasteModal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="pasteTitle">
+    <div class="modal-head">
+      <h2 id="pasteTitle">Thêm tài liệu</h2>
+      <button class="icon-btn" data-close aria-label="Đóng"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <p class="modal-sub">Dán một đoạn văn bản, một đường dẫn file trên máy (ví dụ <code>E:\Tai lieu\bai.pdf</code>) hoặc một link web.</p>
+    <input class="field" id="pasteTitleInput" placeholder="Tiêu đề (không bắt buộc)">
+    <textarea class="field" id="pasteText" rows="10" placeholder="Dán nội dung ở đây..."></textarea>
+    <div class="modal-foot">
+      <span class="hint" id="pasteHint"></span>
+      <button class="btn ghost" data-close>Huỷ</button>
+      <button class="btn primary" id="btnPasteGo">Mở và đọc</button>
+    </div>
+  </div>
+</div>
+
+<div class="drop-overlay" id="dropOverlay" hidden>
+  <div>Thả file vào để nghe</div>
+</div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="/app.js"></script>
+</body>
+</html>

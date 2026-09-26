@@ -68,6 +68,66 @@ Neu muon app tu chon mic theo danh sach goi y, dat:
 "preferred_microphone": ""
 ```
 
+## Tro ly doc tai lieu (Doc Reader)
+
+Tro ly doc to tai lieu, ghi chu, bai nghien cuu bang giong tieng Viet tu nhien (Hoai My / Nam Minh),
+de chi can nghe. Dang nghe ma thac mac thi dat cau hoi hoac ghi chu ngay tai cau do.
+
+- Mo: chay `Start Doc Reader.cmd` (hoac keo tha mot file len file nay de mo ngay file do).
+- Dau vao: txt, md (Obsidian), pdf co lop chu, docx, html, epub, link web, Google Docs cong khai,
+  noi dung vua `Ctrl+C` (chu, link hoac duong dan file).
+- Doc tung cau, to sang cau dang doc, tu cuon theo, doc truoc cac cau ke tiep de khong bi ngat.
+- Cau tieng Anh tu doi sang giong tieng Anh. Toc do 0.8x den 2x. Nho vi tri dang nghe cua tung tai lieu.
+- Phim tat: `Space` doc/dung, `<-` `->` cau truoc/sau, `Shift` + mui ten nhay doan, `N` ghi chu,
+  `Q` dat cau hoi, `R` doc lai cau hien tai. Nut tai nghe va phim media cung dieu khien duoc.
+- Ghi chu nhap bang tay, bang micro trong o ghi chu, hoac bang Voice Mic (`Alt + click`).
+- Moi tai lieu co mot file ghi chu Markdown trong `reader-data/notes/` (kem cau trich, ngu canh doan van,
+  danh sach cau hoi chua ro). `reader-data/notes/_INDEX.md` liet ke tat ca. Nut `Copy de hoi Claude`
+  tao san loi nhan kem duong dan file de dan cho Claude doc va tra loi.
+- Chay local tai `http://127.0.0.1:8767`, chi nhan ket noi tu chinh may nay. Can Internet de tao giong doc
+  (dich vu giong doc cua Microsoft Edge qua `edge-tts`), am thanh duoc cache trong `reader-data/tts-cache/`.
+- Du lieu cua tro ly doc nam trong `reader-data/` va khong dua len GitHub.
+- Doi cong, thu muc ghi chu (vi du mot thu muc Obsidian hoac Google Drive): sua `reader-data/settings.json`
+  (`port`, `notes_dir`).
+
+## Vong tron chon che do (Alt + click)
+
+- `Alt + click` vao khung chat: hien ngay vong tron nho, chua vao che do nao. O dang tro sang mau cam.
+  Tro chuot vao o roi click (hoac giu chuot keo toi o roi tha): tren = Go chu, trai = Doc, phai = Noi, duoi = Huy.
+  - Go chu: voice to text nhu cu.
+  - Doc: boi den hoac Ctrl+C doan can nghe truoc; tro ly giong nam doc to doan do va luu vao Tro ly doc.
+    Chua copy gi thi mo cua so Tro ly doc de anh dan hoac keo file vao.
+  - Noi: tro chuyen voi tro ly.
+  - Huy: `Esc`, click ra ngoai, hoac de yen 10 giay.
+- Dang nghe: nut tron nho co song am, nhan trang thai co dau. Noi xong hien the ket qua kem so ky tu, so tu,
+  toc do noi, do tin cay.
+- Dang doc: `Ctrl+Alt+V` hoac `Alt + click` de tam dung / doc tiep, `Esc` de dung han.
+- Tat vong tron (Alt + click go chu ngay nhu truoc): `"enable_radial_menu": false` trong `voice-mic-settings.local.json`.
+
+## Tro chuyen bang giong noi (lenh "voice")
+
+- Mo chac chan, khong can noi lenh: `Alt + click` roi chon nut "Noi", hoac phim tat `Ctrl+Alt+V` o bat ky dau.
+  Doi phim tat: `"voice_chat_hotkey": "ctrl+alt+space"` (de trong thi tat).
+- Mo bang giong noi: chon "Go chu" roi noi "tro chuyen" (nhan dien chac nhat), "noi chuyen", hoac "voice".
+  Chu "voice" noi mot minh Google hay nghe nham, nen may xet ca cac cach nghe du phong va nghe them mot luot tieng Anh.
+- Tro ly giong nam (Nam Minh) chao anh, anh noi cau hoi, tro ly tra loi bang giong noi roi tu nghe tiep.
+- Khi Google khong nghe ra chu nao ma Whisper chi doan duoc vai chu cho ca doan dai (thuong la tieng on),
+  Voice Mic bao "thu lai" thay vi dan cau vo nghia vao khung chat.
+- Noi "de nguyen" / "giu nguyen" / "nhap chu": mic nghe lai de anh doc chu vao khung chat nhu cu.
+- Noi binh thuong (khong phai lenh): van go chu vao khung chat nhu truoc.
+- Tam dung (giu cuoc tro chuyen): noi "tam dung", "cho chut", "doi da", hoac bam `Ctrl+Alt+V`.
+  Noi tiep: `Alt + click` hoac `Ctrl+Alt+V`.
+- Tat han: noi "thoi", "dung lai", "cam on em", "tam biet", hoac bam `Esc`. Im lang khoang 12 giay cung tu nghi.
+  `Alt + click` luc tro ly dang noi de ngat loi.
+- Giong doc tu nhien hon: Tro ly doc doc lien ca doan (ngu dieu nhu nguoi doc), doc day du chu viet tat
+  (TP. HCM, 50k, 5tr, 9h30...), co 4 giong da ngu moi (Andrew, Brian, Ava, Emma) doc tot tu tieng Anh xen ke.
+  Nut "Nghe thu" de so sanh. Bang doc tu sua trong `reader-data/pronunciations.json` (vi du `"AI": "ây ai"`).
+- Bo nao AI tu chon: Claude API (neu co `ANTHROPIC_API_KEY` va da cai `anthropic`) -> Claude Code dong lenh
+  (neu da `claude` roi `/login`) -> Ollama tren may (`qwen2.5:7b`). Ep bang `voice_chat_backend` trong
+  `voice-mic-settings.local.json` (`auto`, `claude-api`, `claude-cli`, `ollama`). Doi giong: `voice_chat_voice`,
+  toc do: `voice_chat_rate` (vi du `+8%`). Tat lenh giong noi: `"enable_voice_commands": false`.
+- Moi cuoc tro chuyen luu lai trong `reader-data/conversations/`.
+
 ## Chay tu source
 
 Yeu cau:

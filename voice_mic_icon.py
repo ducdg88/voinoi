@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ctypes
 import concurrent.futures
+import contextlib
 import hashlib
 import json
 import math
@@ -33,6 +34,7 @@ warnings.filterwarnings("ignore", category=UserWarning, message=".*pkg_resources
 import audioop
 import speech_recognition as sr
 
+_faster_whisper = None
 _whisper = None
 try:
     import webrtcvad
@@ -65,10 +67,12 @@ CORE = 26
 HUD_WIDTH = 220
 HUD_HEIGHT = 44
 HUD_GAP = 8
-PARTICLE_EFFECT_WIDTH = 300
-PARTICLE_EFFECT_HEIGHT = 300
+PARTICLE_EFFECT_WIDTH = 250   # nut tron nho + nhan trang thai + the ket qua
+PARTICLE_EFFECT_HEIGHT = 160
+ORB_RADIUS = 30
+RESULT_SHOW_MS = 4000
 PARTICLE_EFFECT_DEFAULT_COUNT = 180
-PARTICLE_EFFECT_GAP = 18
+PARTICLE_EFFECT_GAP = 8
 HIDE_FLOATING_MIC_BUTTON = True
 SHOW_FLOATING_MIC_ICON = False
 STREAM_PHRASE_SECONDS = 7
@@ -88,23 +92,26 @@ WEBRTC_RMS_MIN_GATE = 220
 WEBRTC_RMS_NOISE_RATIO = 0.65
 WEBRTC_VAD_AGGRESSIVENESS = 2
 WEBRTC_VAD_SAMPLE_RATE = 16000
-WEBRTC_SHORT_VOICE_END_SECONDS = 1.45
-RMS_SHORT_VOICE_END_SECONDS = 1.65
+WEBRTC_SHORT_VOICE_END_SECONDS = 1.8
+RMS_SHORT_VOICE_END_SECONDS = 2.0
 LONG_VOICE_AFTER_SECONDS = 9.0
-WEBRTC_VOICE_END_SECONDS = 2.05
-RMS_VOICE_END_SECONDS = 2.3
+WEBRTC_VOICE_END_SECONDS = 1.7
+RMS_VOICE_END_SECONDS = 1.9
 MIN_CAPTURE_BEFORE_AUTO_STOP_SECONDS = 1.2
+MIN_CAPTURE_BEFORE_SILENCE_STOP_SECONDS = 3.0
 VAD_SOFT_ACTIVITY_MARGIN = 120
 VAD_SOFT_ACTIVITY_MULTIPLIER = 1.08
-GOOGLE_RECOGNITION_TIMEOUT_SECONDS = 20.0
-GOOGLE_SINGLE_PASS_MAX_SECONDS = 20.0
-GOOGLE_LONG_CHUNK_SECONDS = 16.0
+GOOGLE_RECOGNITION_TIMEOUT_SECONDS = 10.0
+GOOGLE_SINGLE_PASS_MAX_SECONDS = 10.0
+GOOGLE_LONG_CHUNK_SECONDS = 9.0
 GOOGLE_CHUNK_BOUNDARY_SEARCH_SECONDS = 2.5
 GOOGLE_CHUNK_MIN_SECONDS = 5.0
-GOOGLE_CHUNK_MIN_TAIL_SECONDS = 3.0
+GOOGLE_CHUNK_MIN_TAIL_SECONDS = 4.5
 GOOGLE_MIN_RETRY_CHUNK_SECONDS = 4.0
 GOOGLE_CHUNK_RETRY_ATTEMPTS = 2
 GOOGLE_LOW_CONFIDENCE_FALLBACK_THRESHOLD = 0.82
+WHISPER_VERIFY_LONG_AUDIO_SECONDS = 12.0
+WHISPER_SELECTION_MARGIN = 0.04
 VOICE_CONTEXT_MAX_TERMS = 300
 VOICE_CONTEXT_MAX_PHRASES = 220
 TRANSPARENT = "#ff00ff"
@@ -132,8 +139,8 @@ SINGLE_INSTANCE_MUTEX_NAME = "Local\\VietnameseVoiceMicSingleInstance"
 SINGLE_INSTANCE_MUTEX_HANDLE = None
 SINGLE_INSTANCE_LOCK_FILE_HANDLE = None
 
-user32 = ctypes.windll.user32
-kernel32 = ctypes.windll.kernel32
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 UIA_DESKTOP = Desktop(backend="uia") if Desktop else None
 
 HWND_TOPMOST = wintypes.HWND(-1)
@@ -150,6 +157,7 @@ VK_CONTROL = 0x11
 VK_MENU = 0x12
 VK_M = 0x4D
 VK_V = 0x56
+VK_C = 0x43
 VK_LBUTTON = 0x01
 VK_BACK = 0x08
 VK_1 = 0x31
@@ -163,11 +171,30 @@ GMEM_MOVEABLE = 0x0002
 GWL_EXSTYLE = -20
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_APPWINDOW = 0x00040000
+WS_EX_NOACTIVATE = 0x08000000
 SM_XVIRTUALSCREEN = 76
 SM_YVIRTUALSCREEN = 77
 SM_CXVIRTUALSCREEN = 78
 SM_CYVIRTUALSCREEN = 79
 VOICE_HOTKEY_NAME = "Ctrl+Alt+M"
+SHORT_COMMAND_MAX_SECONDS = 4.0
+RADIAL_TIMEOUT_SECONDS = 10.0  # vong tron tu dong neu khong chon gi
+RADIAL_SIZE = 220              # khung ve (vong tron 92px + cho cho hieu ung phong/vien sang)
+RADIAL_OUTER = 92
+RADIAL_INNER = 30
+RADIAL_ACTIVE = "#c2410c"      # mau cam cho o dang tro chuot
+RADIAL_IDLE = "#141c2b"
+RADIAL_GLOW = "#fb923c"        # vien sang quanh o dang chon
+RADIAL_OPEN_SECONDS = 0.16     # thoi gian hien len (phong to + ro dan)
+RADIAL_CLOSE_SECONDS = 0.11    # thoi gian thu nho + mo di khi chon xong
+RADIAL_FRAME_MS = 16
+# (ma, nhan, dong phu, goc bat dau Tk: do, nguoc chieu kim dong ho tinh tu huong 3 gio)
+RADIAL_OPTIONS = (
+    ("dictation", "Gõ chữ", "voice to text", 45),
+    ("reader", "Đọc", "đoạn đã copy", 135),
+    ("cancel", "Huỷ", "", 225),
+    ("chat", "Nói", "trò chuyện", 315),
+)
 
 if ctypes.sizeof(ctypes.c_void_p) == ctypes.sizeof(ctypes.c_longlong):
     user32.GetWindowLongPtrW.restype = ctypes.c_longlong
@@ -185,6 +212,8 @@ kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
 kernel32.CreateMutexW.restype = wintypes.HANDLE
 kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
 kernel32.GetLastError.restype = wintypes.DWORD
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
 user32.SetClipboardData.restype = wintypes.HANDLE
 user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
 user32.GetClipboardData.restype = wintypes.HANDLE
@@ -197,6 +226,9 @@ user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
 user32.ClientToScreen.restype = wintypes.BOOL
 user32.IsWindow.argtypes = [wintypes.HWND]
 user32.IsWindow.restype = wintypes.BOOL
+user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
+user32.GetParent.argtypes = [wintypes.HWND]
+user32.GetParent.restype = wintypes.HWND
 
 
 class GUITHREADINFO(ctypes.Structure):
@@ -316,6 +348,41 @@ def select_microphone_device(settings: dict[str, object]) -> tuple[int | None, s
     return None, "system default"
 
 
+def microphone_device_candidates(settings: dict[str, object]) -> list[tuple[int | None, str]]:
+    names = sr.Microphone.list_microphone_names()
+    preferred = str(settings.get("preferred_microphone", "") or "").strip().lower()
+    fallback_hints = settings.get("microphone_name_hints", ["Microphone", "Headset", "USB Audio Device", "External Microphone"])
+    hints = [str(h).lower() for h in fallback_hints if str(h).strip()]
+    candidates: list[tuple[int | None, str]] = []
+    seen: set[int | None] = set()
+
+    def add(index: int | None, name: str) -> None:
+        if index in seen:
+            return
+        seen.add(index)
+        candidates.append((index, name))
+
+    selected_index, selected_name = select_microphone_device(settings)
+    add(selected_index, selected_name)
+
+    needles = [needle for needle in [preferred, *hints] if needle]
+    scored: list[tuple[int, int, str]] = []
+    for index, name in enumerate(names):
+        lower = name.lower()
+        if needles and not any(needle in lower for needle in needles):
+            continue
+        score = microphone_name_score(name)
+        if score <= -20:
+            continue
+        scored.append((score, index, name))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    for _score, index, name in scored:
+        add(index, name)
+
+    add(None, "system default")
+    return candidates
+
+
 def set_clipboard_text(text: str) -> None:
     data = text.encode("utf-16-le") + b"\x00\x00"
     hglob = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
@@ -386,13 +453,13 @@ def send_ctrl_v() -> None:
 def focus_locked_target(target_hwnd: int, target_point: tuple[int, int] | None, click_to_focus: bool = True) -> int:
     if target_hwnd:
         user32.SetForegroundWindow(target_hwnd)
-        time.sleep(0.12)
+        time.sleep(0.05)
     if click_to_focus and target_point:
         user32.SetCursorPos(target_point[0], target_point[1])
-        time.sleep(0.05)
+        time.sleep(0.02)
         user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
         user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-        time.sleep(0.18)
+        time.sleep(0.08)
     return foreground_window()
 
 
@@ -400,6 +467,7 @@ def beep_async(kind: str) -> None:
     patterns = {
         "start": ((1200, 60),),
         "chunk": ((980, 35),),
+        "tick": ((1500, 12),),
         "done": ((880, 70), (1180, 45)),
         "stop": ((620, 55),),
         "error": ((400, 80), (300, 80)),
@@ -459,9 +527,58 @@ def save_last_audio(audio: sr.AudioData, metadata: dict[str, object] | None = No
         log(f"last audio save error: {type(exc).__name__}: {exc}")
 
 
+LAST_OWN_CLIPBOARD_SEQ = [0]  # so thu tu clipboard luc Voice Mic tu dat transcript vao (de khong doc nham)
+
+
+def clipboard_sequence() -> int:
+    return int(user32.GetClipboardSequenceNumber())
+
+
+READER_URL = "http://127.0.0.1:8767"
+
+
+def reader_request(path: str, body: dict | None = None, timeout: float = 30.0) -> dict:
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(
+        f"{READER_URL}/api/{path}", data=data, headers={"Content-Type": "application/json"} if data else {},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def reader_import_clipboard() -> dict:
+    """Dua noi dung clipboard (chu, link hoac duong dan file) vao Tro ly doc; tu bat may chu neu chua chay."""
+    try:
+        reader_request("ping", timeout=1.5)
+    except Exception:
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        subprocess.Popen(
+            [str(pythonw if pythonw.exists() else sys.executable), "-X", "utf8", str(APP_DIR / "doc_reader.py"), "--no-browser"],
+            cwd=str(APP_DIR), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        deadline = time.monotonic() + 15
+        while True:
+            time.sleep(0.4)
+            try:
+                reader_request("ping", timeout=1.0)
+                break
+            except Exception:
+                if time.monotonic() > deadline:
+                    raise
+    try:
+        return reader_request("import", {"kind": "clipboard"}, timeout=40)
+    except urllib.error.HTTPError as exc:
+        try:
+            message = json.loads(exc.read().decode("utf-8")).get("error") or str(exc)
+        except Exception:
+            message = str(exc)
+        raise RuntimeError(message) from exc
+
+
 def keep_transcript_on_clipboard(text: str, reason: str) -> bool:
     ok = set_clipboard_text_retry(text)
     if ok:
+        LAST_OWN_CLIPBOARD_SEQ[0] = clipboard_sequence()
         log(f"recovery clipboard set | reason={reason} | text={text[:80]}")
     else:
         log(f"recovery clipboard failed | reason={reason} | text={text[:80]}")
@@ -470,6 +587,18 @@ def keep_transcript_on_clipboard(text: str, reason: str) -> bool:
 
 def acquire_single_instance_lock() -> bool:
     global SINGLE_INSTANCE_MUTEX_HANDLE, SINGLE_INSTANCE_LOCK_FILE_HANDLE
+    ctypes.set_last_error(0)
+    handle = kernel32.CreateMutexW(None, True, SINGLE_INSTANCE_MUTEX_NAME)
+    last_error = ctypes.get_last_error()
+    if not handle:
+        log("single instance mutex failed; falling back to file lock")
+    elif last_error == ERROR_ALREADY_EXISTS:
+        kernel32.CloseHandle(handle)
+        log("another Vietnamese Voice Mic instance is already running; exiting")
+        return False
+    else:
+        SINGLE_INSTANCE_MUTEX_HANDLE = handle
+
     try:
         LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
         lock_file = LOCK_FILE.open("a+b")
@@ -481,17 +610,12 @@ def acquire_single_instance_lock() -> bool:
         lock_file.flush()
         SINGLE_INSTANCE_LOCK_FILE_HANDLE = lock_file
     except OSError:
+        if SINGLE_INSTANCE_MUTEX_HANDLE:
+            kernel32.CloseHandle(SINGLE_INSTANCE_MUTEX_HANDLE)
+            SINGLE_INSTANCE_MUTEX_HANDLE = None
         log("another Vietnamese Voice Mic instance is already running; exiting via file lock")
         return False
 
-    handle = kernel32.CreateMutexW(None, False, SINGLE_INSTANCE_MUTEX_NAME)
-    if not handle:
-        log("single instance lock failed; continuing without lock")
-        return True
-    SINGLE_INSTANCE_MUTEX_HANDLE = handle
-    if int(kernel32.GetLastError()) == ERROR_ALREADY_EXISTS:
-        log("another Vietnamese Voice Mic instance is already running; exiting")
-        return False
     return True
 
 
@@ -657,6 +781,46 @@ def set_window_long(hwnd: int, index: int, value: int) -> None:
         user32.SetWindowLongW(hwnd, index, value)
 
 
+def mix_color(start: str, end: str, t: float) -> str:
+    """Pha tron hai mau hex theo ti le t (0..1), de chuyen mau muot."""
+    t = max(0.0, min(1.0, t))
+    a = [int(start[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(end[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(a, b))
+
+
+def round_rect(canvas: tk.Canvas, x1: float, y1: float, x2: float, y2: float, radius: float, **options: object) -> int:
+    """Hinh chu nhat bo tron goc tren canvas Tk (da giac lam muot)."""
+    r = min(radius, (x2 - x1) / 2, (y2 - y1) / 2)
+    points = [
+        x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
+        x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
+    ]
+    return canvas.create_polygon(points, smooth=True, **options)
+
+
+def find_window_by_title(fragment: str) -> int:
+    """Tim cua so dang hien co tieu de chua doan chu nay (vi du cua so Tro ly doc)."""
+    found: list[int] = []
+    enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def callback(hwnd: int, _lparam: int) -> bool:
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        if fragment in buffer.value:
+            found.append(int(hwnd))
+            return False
+        return True
+
+    user32.EnumWindows(enum_proc(callback), 0)
+    return found[0] if found else 0
+
+
 def make_tool_window(hwnd: int) -> None:
     ex_style = get_window_long(hwnd, GWL_EXSTYLE)
     ex_style |= WS_EX_TOOLWINDOW
@@ -704,6 +868,27 @@ def left_button_down() -> bool:
 
 def key_down(vk: int) -> bool:
     return bool(user32.GetAsyncKeyState(vk) & 0x8000)
+
+
+HOTKEY_KEY_CODES = {"ctrl": VK_CONTROL, "control": VK_CONTROL, "alt": VK_MENU, "shift": 0x10,
+                    "win": 0x5B, "space": 0x20, "enter": 0x0D, "tab": 0x09}
+
+
+def parse_hotkey(text: str) -> tuple[int, ...]:
+    """'ctrl+alt+v' -> (VK_CONTROL, VK_MENU, 0x56). Chuoi rong hoac sai thi tat phim tat."""
+    codes: list[int] = []
+    for part in text.lower().replace(" ", "").split("+"):
+        if not part:
+            continue
+        if part in HOTKEY_KEY_CODES:
+            codes.append(HOTKEY_KEY_CODES[part])
+        elif len(part) == 1 and part.isalnum():
+            codes.append(ord(part.upper()))
+        elif re.fullmatch(r"f([1-9]|1[0-2])", part):
+            codes.append(0x70 + int(part[1:]) - 1)
+        else:
+            return ()
+    return tuple(codes) if len(codes) >= 2 else ()
 
 
 def voice_hotkey_down() -> bool:
@@ -1046,6 +1231,17 @@ _VIETNAMESE_CLEANUP_PATTERNS = (
     (r"\bt\u1ed1i\s+v\u00e0\b", "t\u1ed1i \u01b0u"),
     (r"\bki\u1ec3m\s+tra\s+k\u00fd\b", "ki\u1ec3m tra k\u1ef9"),
     (r"\bxem\s+l\u1ea1i\s+k\u00fd\b", "xem l\u1ea1i k\u1ef9"),
+    (r"\bcheck\s+l\u1ea1i\s+(?:k\u00fd|k\u0129|k\u1ef9)\b", "ki\u1ec3m tra k\u1ef9"),
+    (r"\bcheck\s+(?:k\u00fd|k\u0129|k\u1ef9)\b", "ki\u1ec3m tra k\u1ef9"),
+    (r"\b(?:akmin|adminn|atmin)\b", "Admin"),
+    (r"\b(\d+)\s+\u0111\u1ea7n\b", r"\1 lần"),
+    (r"\b(?:t\u0103ng|t\u00ean t\u0103ng|t\u1ef1a \u0111ang)\s+nh\u1eadp\b", "\u0111\u0103ng nh\u1eadp"),
+    (r"\b(?:app|áp)\s+d\u1ee5ng\b", "\u00e1p d\u1ee5ng"),
+    (r"\b\u0111\u00e1\s+ta\b", "data"),
+    (r"\bv\u01a1\s+va\s+v\u1eadn\b", "v\u1edb va v\u1edb v\u1ea9n"),
+    (r"\bki\u1ec3m\s+tra\s+k\u00ed\b", "ki\u1ec3m tra k\u1ef9"),
+    (r"\bt\u1eb7ng\s+website\b", "th\u1eb3ng website"),
+    (r"\bt\u1ea3ng\s+website\b", "th\u1eb3ng website"),
     (r"\bxe\s+m\u00e1y\s+t\u00ed\b", "xem l\u1ea1i k\u1ef9"),
     (r"\bskill\s+m\u00e1t\b", "skill map"),
     (r"\bsql\s+m\u00e1t\b", "skill map"),
@@ -1242,7 +1438,7 @@ def configured_context_terms() -> list[str]:
         return []
     terms = settings.get("speech_context_terms", [])
     if isinstance(terms, list):
-        return [str(term).strip() for term in terms if str(term).strip()]
+        return [repair_mojibake(str(term).strip()) for term in terms if str(term).strip()]
     return []
 
 
@@ -1268,7 +1464,7 @@ def configured_context_phrases() -> list[str]:
     if not bool(settings.get("enable_context_memory", True)):
         return []
     phrases = settings.get("speech_context_phrases", [])
-    configured = [str(phrase).strip() for phrase in phrases if str(phrase).strip()] if isinstance(phrases, list) else []
+    configured = [repair_mojibake(str(phrase).strip()) for phrase in phrases if str(phrase).strip()] if isinstance(phrases, list) else []
     return list(_PERSONAL_PHRASE_SEEDS) + configured
 
 
@@ -1425,8 +1621,13 @@ def cleanup_pass(text: str) -> str:
     text = apply_vietnamese_cleanup_patterns(text)
     text = apply_custom_replacements(text)
     text = apply_context_terms(text)
-    text = re.sub(r"\b(Ã |á»|á»«|á»«m|á»m)\b[ ,]*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"^(mÃ¡y|mÃ y)\s+(?=lÃ m|táº¡o|viáº¿t|kiá»ƒm|thá»­|chÃ¨n|gá»­i|phÃ¢n|xem|cho)\b", "hÃ£y ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(\u00e0|\u1edd|\u1eeb|\u1eebm|\u1eddm)\b[ ,]*", "", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"^(m\u00e1y|m\u00e0y)\s+(?=l\u00e0m|t\u1ea1o|vi\u1ebft|ki\u1ec3m|th\u1eed|ch\u00e8n|g\u1eedi|ph\u00e2n|xem|cho)\b",
+        "h\u00e3y ",
+        text,
+        flags=re.IGNORECASE,
+    )
     text = re.sub(r"\b(\w{2,})(?:\s+\1\b)+", r"\1", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+([,.!?;:])", r"\1", text)
     text = re.sub(r"([,.!?;:])(?=\S)", r"\1 ", text)
@@ -1442,16 +1643,19 @@ def clean_transcript(text: str) -> str:
     text = text.strip(" \t\r\n\"'")
 
     junk_phrases = (
-        "cáº£m Æ¡n cÃ¡c báº¡n Ä‘Ã£ theo dÃµi",
-        "hÃ£y subscribe cho kÃªnh",
-        "hÃ£y Ä‘Äƒng kÃ½ kÃªnh",
-        "lá»i nÃ³i tiáº¿ng viá»‡t cÃ³ dáº¥u",
-        "lá»i nÃ³i tiáº¿ng viá»‡t tá»± nhiÃªn chÃ­nh táº£ tiáº¿ng viá»‡t cÃ³ dáº¥u",
+        "c\u1ea3m \u01a1n c\u00e1c b\u1ea1n \u0111\u00e3 theo d\u00f5i",
+        "h\u00e3y subscribe cho k\u00eanh",
+        "h\u00e3y \u0111\u0103ng k\u00fd k\u00eanh",
+        "l\u1eddi n\u00f3i ti\u1ebfng vi\u1ec7t c\u00f3 d\u1ea5u",
+        "l\u1eddi n\u00f3i ti\u1ebfng vi\u1ec7t t\u1ef1 nhi\u00ean ch\u00ednh t\u1ea3 ti\u1ebfng vi\u1ec7t c\u00f3 d\u1ea5u",
     )
     normalized = text.strip(" .,!?:;").lower()
     if normalized in junk_phrases:
         return ""
-    if normalized and all(phrase in normalized for phrase in ("tiáº¿ng viá»‡t cÃ³ dáº¥u", "Ã´ chat")):
+    if re.search(r"\b(?:subscribe|đăng ký kênh|không bỏ lỡ.*video|video hấp dẫn|la school)\b", normalized):
+        if count_transcript_words(normalized) <= 18:
+            return ""
+    if normalized and all(phrase in normalized for phrase in ("ti\u1ebfng vi\u1ec7t c\u00f3 d\u1ea5u", "\u00f4 chat")):
         return ""
 
     return cleanup_pass(text)
@@ -1628,6 +1832,43 @@ def transcript_quality_penalty(text: str) -> float:
     return penalty
 
 
+_DICTATION_SUSPICIOUS_PATTERNS = (
+    r"\b\u00f4ng\s+\u0111\u1ecba\b",
+    r"\bn\u1ea1p\s+pin\b",
+    r"\bph\u00e1t\s+bi\u1ec3u\s+l\u00e0m\s+v\u00f2ng\b",
+    r"\bth\u1ebf\s+k\u1ef7\b",
+    r"\bh\u00f3a\s+h\u1ecdc\b",
+    r"\bmotor\b",
+    r"\bqu\u1ed1c\s+xai\b",
+    r"\bt\u00e1c\s+kh\u00e1c\b",
+    r"\bb\u1eaft\s+\u0111\u01b0\u1ee3c\s+nh\u1ea7m\b",
+    r"\bc\u00e1i\s+bu\u1ed9c\s+n\u00e0y\b",
+    r"\bsau\s+ti\u00eau\s+kh\u00f4ng\b",
+    r"\bxung\s+to\u00e0n\b",
+    r"\bgi\u1ea5u\s+v\u01a1\s+va\s+v\u1eadn\b",
+    r"\bgi\u1ea5u\s+ki\u1ec3u\b",
+    r"\bgi\u1ea5u\s+\u0111\u1ea7u\b",
+    r"\bki\u1ec3m\s+tra\s+k\u00ed\s+h\u01b0\s+kh\u00f4ng\b",
+    r"\b(?:lu\u1eadn|lu\u1ed3ng)\s+kh\u00e1c\s+\u0111\u01b0\u1ee3c\s+ch\u01b0a\b",
+)
+
+
+def transcript_suspicion_penalty(text: str) -> float:
+    lower = text.lower()
+    hits = sum(1 for pattern in _DICTATION_SUSPICIOUS_PATTERNS if re.search(pattern, lower, flags=re.IGNORECASE))
+    return min(0.24, hits * 0.06)
+
+
+def transcript_selection_score(text: str) -> float:
+    words = count_transcript_words(text)
+    return (
+        min(0.14, words * 0.003)
+        + transcript_context_score(text)
+        - transcript_quality_penalty(text)
+        - transcript_suspicion_penalty(text)
+    )
+
+
 def choose_google_alternative(response: object) -> tuple[str, float | None, int]:
     alternatives = google_response_alternatives(response)
     if not alternatives:
@@ -1651,6 +1892,28 @@ def choose_google_alternative(response: object) -> tuple[str, float | None, int]
             best_confidence = confidence
             best_score = score
     return best_clean or clean_transcript(best_raw), best_confidence, len(alternatives)
+
+
+def audio_speech_level(audio: sr.AudioData) -> int:
+    """Muc to cua phan co tieng noi (phan vi 80 cua do to tung 100ms), de biet doan nao chi la im lang."""
+    data = audio.frame_data
+    width = audio.sample_width
+    step = max(width, int(audio.sample_rate * 0.1) * width)
+    levels = sorted(audioop.rms(data[i:i + step], width) for i in range(0, len(data) - width, step))
+    if not levels:
+        return 0
+    return levels[min(len(levels) - 1, int(len(levels) * 0.8))]
+
+
+def google_transcripts(audio: sr.AudioData, language: str) -> list[str]:
+    """Moi cach nghe Google tra ve cho doan am thanh (dung de bat lenh ngan nhu "voice")."""
+    recognizer = sr.Recognizer()
+    recognizer.operation_timeout = GOOGLE_RECOGNITION_TIMEOUT_SECONDS
+    try:
+        response = recognizer.recognize_google(audio, language=language, show_all=True)
+    except Exception:
+        return []
+    return [text for text, _confidence in google_response_alternatives(response) if text]
 
 
 def format_confidence_percent(confidence: float | None) -> str:
@@ -1686,6 +1949,10 @@ class MicIconApp:
         self.drag_start: tuple[int, int, int, int] | None = None
         self.dragged = False
         self.listening = False
+        self.processing = False
+        # "dictation" = noi thanh chu, "conversation" = tro chuyen voi tro ly giong nam (lenh "voice")
+        self.session_mode = "dictation"
+        self.conversation = None
         self.visual_state = "idle"
         self.hud_state = "idle"
         self.settings = load_settings()
@@ -1729,27 +1996,40 @@ class MicIconApp:
         self._auto_listen_triggered = False
         self._auto_click_token = 0
         self._alt_click_token = 0
+        self.discard_session_id = 0
+        self.last_transcript_whisper_only = False
+        self.last_google_alternatives: list[str] = []
+        self.voice_chat_hotkey = parse_hotkey(str(self.settings.get("voice_chat_hotkey", "ctrl+alt+v") or ""))
+        self.voice_chat_hotkey_was_down = False
+        self.command_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice-command")
         self._alt_click_triggered = False
         self.recognizer = sr.Recognizer()
         self.recognizer.operation_timeout = GOOGLE_RECOGNITION_TIMEOUT_SECONDS
         self.google_confidence_scores: list[float] = []
         self.whisper_model = None
+        self.whisper_backend = ""
         self.enable_whisper_fallback = bool(self.settings.get("enable_whisper_fallback", False))
         self.whisper_model_name = str(self.settings.get("whisper_model", "base") or "base")
+        self.whisper_compute_type = str(self.settings.get("whisper_compute_type", "int8") or "int8")
+        # Whisper chi nap khi bat dau noi, tu nha sau whisper_idle_unload_minutes khong dung
+        # (26/09/2026: nap san tu luc khoi dong giu ~2 GB RAM ca ngay).
+        self.whisper_loader: threading.Thread | None = None
+        self.whisper_last_used = 0.0
+        self.whisper_idle_unload_seconds = 60 * float(self.settings.get("whisper_idle_unload_minutes", 15) or 0)
         if self.enable_whisper_fallback:
-            threading.Thread(target=self._load_whisper_model, daemon=True).start()
+            log(f"whisper loads on first speech, unloads after {self.whisper_idle_unload_seconds / 60:.0f} min idle")
         else:
             log("whisper disabled by settings; google speech recognition only")
         log(
             f"app started | build={APP_BUILD} | auto_start={AUTO_START_FROM_CHAT_CLICK} | "
             f"trigger=Alt+left-click | mic_index={self.microphone_device_index} | mic={self.microphone_device_name} | "
-            f"whisper={self.enable_whisper_fallback}:{self.whisper_model_name}"
+            f"whisper={self.enable_whisper_fallback}:{self.whisper_model_name}:{self.whisper_compute_type}"
         )
 
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
-        self.root.bind("<Escape>", lambda _event: self.request_stop("escape") if self.listening else self.root.destroy())
+        self.root.bind("<Escape>", self.handle_escape_key)
 
         self.hud = tk.Toplevel(self.root)
         self.hud.title(f"{APP_TITLE} Status")
@@ -1791,6 +2071,34 @@ class MicIconApp:
         )
         self.particle_canvas.pack(fill="both", expand=True)
 
+        # Vong tron chon che do (Alt + giu chuot): Go chu / Tro chuyen / Doc tai lieu / Huy
+        self.radial = tk.Toplevel(self.root)
+        self.radial.title(f"{APP_TITLE} Menu")
+        self.radial.overrideredirect(True)
+        self.radial.attributes("-topmost", True)
+        self.radial.attributes("-alpha", 0.96)
+        self.radial.configure(bg=TRANSPARENT)
+        self.radial.wm_attributes("-transparentcolor", TRANSPARENT)
+        self.radial.resizable(False, False)
+        self.radial.withdraw()
+        self.radial_canvas = tk.Canvas(
+            self.radial, width=RADIAL_SIZE, height=RADIAL_SIZE, highlightthickness=0, bd=0, bg=TRANSPARENT, cursor="arrow",
+        )
+        self.radial_canvas.pack(fill="both", expand=True)
+        self.radial_open = False
+        self.radial_closing = False
+        self.radial_animating = False
+        self.radial_closed_at = 0.0
+        self.radial_hover: dict[str, float] = {}
+        self.radial_choice: str | None = None
+        self.radial_center: tuple[int, int] = (0, 0)  # tam vong tron tren man hinh
+        self.radial_anchor: tuple[int, int] = (0, 0)
+        self.radial_opened_at = 0.0
+        self.radial_press_inside = False
+        self.radial_dragging = False
+        self.radial_target_hwnd = 0
+        self.reading = None  # dang doc to doan anh chon "Doc"
+
         self.draw("idle")
         self.animate()
         self.root.update_idletasks()
@@ -1800,6 +2108,11 @@ class MicIconApp:
         make_tool_window(self.app_hwnd)
         make_tool_window(self.hud_hwnd)
         make_tool_window(self.particle_hwnd)
+        self.radial_hwnd = int(self.radial.winfo_id())
+        make_tool_window(self.radial_hwnd)
+        # bam vao vong tron khong cuop focus cua khung chat (de go chu van dan dung cho)
+        for hwnd in {self.radial_hwnd, int(user32.GetParent(self.radial_hwnd) or 0)} - {0}:
+            set_window_long(hwnd, GWL_EXSTYLE, get_window_long(hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE)
         if HIDE_FLOATING_MIC_BUTTON:
             self.root.withdraw()
         self.update_hud_position()
@@ -1808,6 +2121,7 @@ class MicIconApp:
         self.monitor_voice_hotkeys()
         self.keep_topmost()
         self.check_for_updates_on_start()
+        self.root.after(60_000, self.unload_idle_whisper)
 
     def settings_value(self, key: str, default: object) -> object:
         try:
@@ -1922,14 +2236,30 @@ class MicIconApp:
     def monitor_global_clicks(self) -> None:
         try:
             down = left_button_down()
-            if down and not self.auto_was_down:
-                self.mouse_down_had_alt = key_down(VK_MENU)
-            if self.auto_was_down and not down:
-                point = cursor_position()
-                alt_click = self.mouse_down_had_alt and key_down(VK_MENU)
-                self.mouse_down_had_alt = False
-                if alt_click:
-                    self.try_alt_click_listen_from_click(point)
+            pressed = down and not self.auto_was_down
+            released = self.auto_was_down and not down
+            point = cursor_position()
+            if pressed:
+                if self.radial_open:
+                    if self.point_in_radial(point):
+                        self.radial_press_inside = True  # chon khi tha chuot
+                    else:
+                        self.close_radial_menu("click-outside")  # click ra ngoai: dong, click van toi app
+                elif key_down(VK_MENU):
+                    self.handle_alt_press(point)
+            if self.radial_open:
+                self.update_radial_menu(point)
+                if time.monotonic() - self.radial_opened_at > RADIAL_TIMEOUT_SECONDS and not down:
+                    self.close_radial_menu("timeout")
+            if released and self.radial_open and (self.radial_press_inside or self.radial_dragging):
+                choice = self.radial_choice
+                self.radial_press_inside = False
+                self.radial_dragging = False
+                if choice is not None:
+                    # keo toi o roi tha (Alt + giu keo), hoac click vao o: chay lua chon
+                    self.close_radial_menu(f"choice:{choice}")
+                    self.run_radial_choice(choice, self.radial_anchor)
+                # tha o giua ma chua chon: vong tron van mo de anh di chuot toi o roi click
             self.auto_was_down = down
         except Exception as exc:
             log(f"auto click monitor error: {type(exc).__name__}: {exc}")
@@ -1938,9 +2268,30 @@ class MicIconApp:
     def monitor_voice_hotkeys(self) -> None:
         try:
             escape_down = key_down(VK_ESCAPE)
-            if escape_down and not self.escape_was_down and self.listening:
+            if self.radial_open:
+                # thanh chon dang mo: chi chon bang chuot (phim so se go lan chu vao khung chat), Esc de huy
+                if escape_down and not self.escape_was_down:
+                    self.close_radial_menu("escape")
+                self.escape_was_down = escape_down
+                self.root.after(35, self.monitor_voice_hotkeys)
+                return
+            if escape_down and not self.escape_was_down and self.reading is not None:
+                self.reading.stop()
+            elif escape_down and not self.escape_was_down and self.conversation is not None:
+                # Esc trong luc tro chuyen: ket thuc han che do voice
+                self.conversation.stop()
+                if self.listening:
+                    self.request_stop("escape")
+            elif escape_down and not self.escape_was_down and self.listening:
                 self.request_stop("escape")
             self.escape_was_down = escape_down
+
+            # Phim tat mo/tat che do tro chuyen (mac dinh Ctrl+Alt+V), khong can noi lenh
+            if self.voice_chat_hotkey:
+                hotkey_down = all(key_down(code) for code in self.voice_chat_hotkey)
+                if hotkey_down and not self.voice_chat_hotkey_was_down:
+                    self.toggle_voice_conversation_hotkey()
+                self.voice_chat_hotkey_was_down = hotkey_down
 
         except Exception as exc:
             log(f"hotkey monitor error: {type(exc).__name__}: {exc}")
@@ -2007,8 +2358,21 @@ class MicIconApp:
         self.show_hud("armed", "Mic \u0111\u00e3 ghim", 1200)
         log(f"voice target pinned | hwnd={hwnd} | point={point}")
 
+    def handle_escape_key(self, _event: tk.Event) -> None:
+        if self.listening:
+            self.request_stop("escape")
+            return
+        if self.processing:
+            self.draw("busy")
+            self.show_hud("busy", "\u0110ang nh\u1eadn di\u1ec7n...", None)
+            return
+        self.root.destroy()
+
     def request_stop(self, reason: str) -> None:
         if not self.listening:
+            if self.processing:
+                self.draw("busy")
+                self.show_hud("busy", "\u0110ang nh\u1eadn di\u1ec7n...", None)
             return
         self.stop_reason = reason
         self.stop_requested = True
@@ -2021,10 +2385,13 @@ class MicIconApp:
         if self.listening:
             self.request_stop("hotkey")
             return
+        if self.processing:
+            log(f"hotkey ignored: session processing | hotkey={VOICE_HOTKEY_NAME}")
+            return
         self.try_hotkey_listen()
 
     def try_hotkey_listen(self) -> None:
-        if self.listening:
+        if self.listening or self.processing:
             return
         now = time.monotonic()
         armed_target = self.current_armed_target()
@@ -2068,8 +2435,23 @@ class MicIconApp:
             log(f"activation key erase error: {type(exc).__name__}: {exc}")
 
     def try_alt_click_listen_from_click(self, point: tuple[int, int]) -> None:
+        conversation = self.conversation
+        if conversation is not None and conversation.active and not self.listening:
+            # dang tro chuyen: Alt+click de noi tiep khi tam dung, hoac ngat loi tro ly
+            if conversation.paused:
+                log("voice chat resumed by alt-click")
+                conversation.resume()
+            elif conversation.speaking:
+                conversation.interrupt()
+                log("voice chat interrupted by alt-click")
+            return
+
         if self.listening:
-            log(f"alt-click ignored while listening | session={self.active_session_id} | point={point}")
+            self.request_stop("alt-click")
+            log(f"alt-click stops listening | session={self.active_session_id} | point={point}")
+            return
+        if self.processing:
+            log(f"alt-click ignored: session processing | point={point}")
             return
         if not HIDE_FLOATING_MIC_BUTTON and self.point_inside_icon(*point):
             return
@@ -2092,7 +2474,7 @@ class MicIconApp:
     def maybe_start_alt_click_listen(self, hwnd: int, point: tuple[int, int], token: int) -> None:
         if token != self._alt_click_token:
             return
-        if self.listening or getattr(self, "_alt_click_triggered", False):
+        if self.listening or self.processing or getattr(self, "_alt_click_triggered", False):
             return
 
         focused_hwnd = foreground_window()
@@ -2135,6 +2517,8 @@ class MicIconApp:
             return
         if self.listening:
             return
+        if self.processing:
+            return
         if not HIDE_FLOATING_MIC_BUTTON and self.point_inside_icon(*point):
             return
         now = time.monotonic()
@@ -2159,7 +2543,7 @@ class MicIconApp:
     def maybe_start_auto_listen(self, hwnd: int, point: tuple[int, int], token: int) -> None:
         if token != self._auto_click_token:
             return
-        if self.listening or self.armed_target_point == point:
+        if self.listening or self.processing or self.armed_target_point == point:
             return
         # Early-exit: if a previous retry already triggered for this click, skip
         if getattr(self, "_auto_listen_triggered", False):
@@ -2213,7 +2597,7 @@ class MicIconApp:
 
     def start_armed_voice_target(self) -> None:
         target = self.current_armed_target()
-        if not target or self.listening:
+        if not target or self.listening or self.processing:
             return
         target_hwnd, target_point = target
         self.armed_target_hwnd = 0
@@ -2352,9 +2736,13 @@ class MicIconApp:
             if self.hud_hide_after_id:
                 self.root.after_cancel(self.hud_hide_after_id)
                 self.hud_hide_after_id = None
-            if state in {"listen", "busy"} and self.particle_effect_enabled:
+            if state in {"listen", "busy", "speak"} and self.particle_effect_enabled:
                 self.hide_hud()
-                self.show_particle_effect(self.active_target_point)
+                anchor = self.active_target_point or self.particle_anchor_point or self.last_click_point or cursor_position()
+                if self.particle_effect_visible and not self.particle_result_visible:
+                    self.draw_particle_effect()
+                else:
+                    self.show_particle_effect(anchor)
                 return
             if state == "done" and self.particle_effect_enabled and self.particle_result_visible:
                 self.hide_hud()
@@ -2438,7 +2826,7 @@ class MicIconApp:
                 self.hide_particle_effect()
                 return
             x = point[0] - PARTICLE_EFFECT_WIDTH // 2
-            y = point[1] - PARTICLE_EFFECT_HEIGHT - PARTICLE_EFFECT_GAP
+            y = point[1] - PARTICLE_EFFECT_HEIGHT - PARTICLE_EFFECT_GAP + (0 if self.particle_result_visible else 60)
             if y < screen_top + 8:
                 y = point[1] + PARTICLE_EFFECT_GAP
             x = max(screen_left + 8, min(x, screen_right - PARTICLE_EFFECT_WIDTH - 8))
@@ -2448,97 +2836,78 @@ class MicIconApp:
             pass
 
     def draw_particle_effect(self) -> None:
+        """Nut tron nho: song am nhay theo giong anh, nhan trang thai ben duoi, the ket qua khi xong.
+
+        Moi chu deu ve tren nen dac (khong ve thang len nen trong suot) de khong bi vien hong.
+        """
         if not self.particle_effect_enabled:
             return
         canvas = self.particle_canvas
         canvas.delete("all")
-        state = self.visual_state
-        if state not in {"listen", "busy", "done"}:
+        state = "speak" if self.hud_state == "speak" and self.visual_state != "done" else self.visual_state
+        if state not in {"listen", "busy", "done", "speak"}:
             return
-        W, H = PARTICLE_EFFECT_WIDTH, PARTICLE_EFFECT_HEIGHT
-        cx, cy = W // 2, H // 2
-        state_colors = {
-            "listen": ("#12314f", "#1e6f95", "#67e8f9", "#5eead4", "#ecfeff", "DANG NGHE"),
-            "busy": ("#34205f", "#6d28d9", "#c4b5fd", "#ddd6fe", "#f5f3ff", "DANG NHAN DIEN"),
-            "done": ("#14532d", "#16a34a", "#86efac", "#bbf7d0", "#f0fdf4", "DA CO TEXT"),
-        }
-        outer_color, mid_color, accent_color, bar_color, text_color, status_label = state_colors.get(
-            state, state_colors["listen"]
-        )
-        base_radius = 92 if state == "listen" else 88
-        self.audio_level += (self.audio_level_target - self.audio_level) * 0.28
-        if state == "busy":
-            self.audio_level = max(self.audio_level * 0.9, 0.28 + math.sin(self.anim_tick / 3.0) * 0.08)
+        W = PARTICLE_EFFECT_WIDTH
+        cx, cy, r = W / 2, 44, ORB_RADIUS
+        accent, deep = {
+            "listen": ("#5eead4", "#0f766e"),
+            "busy": ("#c4b5fd", "#6d28d9"),
+            "speak": ("#fcd34d", "#b45309"),
+            "done": ("#86efac", "#15803d"),
+        }[state]
+        self.audio_level += (self.audio_level_target - self.audio_level) * 0.3
+        if state in {"busy", "speak"}:
+            self.audio_level = max(self.audio_level * 0.9, 0.25 + math.sin(self.anim_tick / 3.0) * 0.08)
         if state == "done":
-            self.audio_level *= 0.72
+            self.audio_level *= 0.7
         level = max(0.0, min(1.0, self.audio_level))
-        pulse = 1.0 + level * 0.14 + math.sin(self.anim_tick / 5.0) * 0.025
-        radius = base_radius * pulse
 
-        # Soft circular field, no rectangular/pill frame.
-        canvas.create_oval(cx - radius - 18, cy - radius - 18, cx + radius + 18, cy + radius + 18, outline=outer_color, width=1)
-        canvas.create_oval(cx - radius - 7, cy - radius - 7, cx + radius + 7, cy + radius + 7, outline=mid_color, width=2)
-        canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, outline=accent_color, width=3)
+        # vong sang mo rong theo do lon giong noi
+        halo = r + 4 + level * 9 + math.sin(self.anim_tick / 4.0) * 1.2
+        canvas.create_oval(cx - halo, cy - halo, cx + halo, cy + halo, outline=deep, width=2)
+        if state == "listen" and level > 0.15:
+            outer = halo + 5 + level * 5
+            canvas.create_oval(cx - outer, cy - outer, cx + outer, cy + outer, outline=accent, width=1)
+        canvas.create_oval(cx - r, cy - r, cx + r, cy + r, fill="#0b1220", outline=accent, width=2)
 
-        ring_points = 44
-        spin = self.anim_tick * (0.055 if state == "listen" else 0.11)
-        for i in range(ring_points):
-            angle = spin + i * math.tau / ring_points
-            wave = math.sin(self.anim_tick / 2.4 + i * 0.7)
-            outer = radius + 9 + level * 16 + wave * (3 + level * 8)
-            inner = radius - 2
-            x1 = cx + math.cos(angle) * inner
-            y1 = cy + math.sin(angle) * inner
-            x2 = cx + math.cos(angle) * outer
-            y2 = cy + math.sin(angle) * outer
-            color = "#f8fafc" if i % 7 == 0 else bar_color
-            canvas.create_line(x1, y1, x2, y2, fill=color, width=2, capstyle="round")
+        # song am ben trong nut tron (xong thi hien dau tick)
+        if state == "done":
+            canvas.create_line(cx - 11, cy + 1, cx - 3, cy + 9, cx + 12, cy - 8, fill=accent, width=4,
+                               capstyle="round", joinstyle="round")
+        else:
+            bars = 7
+            for i in range(bars):
+                offset = i - (bars - 1) / 2
+                envelope = 1 - abs(offset) / (bars / 2 + 0.5)
+                live = math.sin(self.anim_tick / 1.6 + i * 0.9) * 0.5 + 0.5
+                height = 5 + envelope * (6 + 22 * level) + live * (3 + 5 * level)
+                if state in {"busy", "speak"}:
+                    height = 6 + envelope * 12 + live * 6
+                height = min(height, r * 1.25)
+                x = cx + offset * 6
+                canvas.create_line(x, cy - height / 2, x, cy + height / 2,
+                                   fill="#f8fafc" if abs(offset) < 1 else accent, width=3, capstyle="round")
 
-        # Audio recognition wave inside the circle.
-        bars = 17
-        wave_y = cy - 22 if state == "done" else cy
-        for i in range(bars):
-            offset = i - (bars - 1) / 2
-            x = cx + offset * 6
-            envelope = 1 - min(1, abs(offset) / (bars / 2))
-            live = math.sin(self.anim_tick / 1.7 + i * 0.85) * 0.5 + 0.5
-            height = 8 + envelope * 26 * (0.25 + level) + live * 10
-            if state == "busy":
-                height = 10 + envelope * 22 + live * 7
-            if state == "done":
-                height = 8 + envelope * 16 + live * 6
-            top = wave_y - height / 2
-            bottom = wave_y + height / 2
-            color = "#f8fafc" if abs(offset) < 2 else bar_color
-            canvas.create_line(x, top, x, bottom, fill=color, width=3, capstyle="round")
+        # nhan trang thai (co dau) tren nen dac
+        default_labels = {"listen": "Đang nghe", "busy": "Đang nhận diện", "speak": "Trợ lý đang nói", "done": "Đã có chữ"}
+        message = re.sub(r"\s*#\d+$", "", self.hud_message or "").strip()
+        label = message if message and self.hud_state == state else default_labels[state]
+        if state == "done":
+            label = default_labels["done"]
+        label = ellipsize(label, 34)
+        pill_w = min(W - 8, 18 + len(label) * 6.4)
+        pill_y = cy + r + 14
+        round_rect(canvas, cx - pill_w / 2, pill_y - 10, cx + pill_w / 2, pill_y + 10, 10, fill="#0b1220", outline=deep)
+        canvas.create_text(cx, pill_y, text=label, fill="#f1f5f9", font=("Segoe UI", 8, "bold"))
 
-        for i, (phase, _spread, speed, wobble, depth) in enumerate(self.particles[:90]):
-            angle = phase + self.anim_tick * speed * (2.0 if state == "busy" else 1.0)
-            sparkle_radius = radius + 2 + math.sin(self.anim_tick * 0.07 + phase) * 10 * wobble
-            x = cx + math.cos(angle) * sparkle_radius
-            y = cy + math.sin(angle) * sparkle_radius
-            dot = 0.8 + depth * 1.4
-            color = "#ffffff" if depth > 0.88 else bar_color
-            canvas.create_oval(x - dot, y - dot, x + dot, y + dot, fill=color, outline="")
-
-        canvas.create_text(cx, cy + 42, text=status_label, fill=text_color, font=("Segoe UI", 9, "bold"))
-
+        # the ket qua: cau vua nhan dien + so ky tu
         if state == "done" and self.particle_result_visible:
-            stats = self.particle_result_stats
-            preview = self.particle_result_text
-            panel_x1, panel_y1 = cx - 104, cy + 58
-            panel_x2, panel_y2 = cx + 104, cy + 112
-            panel_r = 12
-            panel_fill = "#052e16"
-            canvas.create_rectangle(panel_x1 + panel_r, panel_y1, panel_x2 - panel_r, panel_y2, fill=panel_fill, outline="")
-            canvas.create_rectangle(panel_x1, panel_y1 + panel_r, panel_x2, panel_y2 - panel_r, fill=panel_fill, outline="")
-            canvas.create_oval(panel_x1, panel_y1, panel_x1 + panel_r * 2, panel_y1 + panel_r * 2, fill=panel_fill, outline="")
-            canvas.create_oval(panel_x2 - panel_r * 2, panel_y1, panel_x2, panel_y1 + panel_r * 2, fill=panel_fill, outline="")
-            canvas.create_oval(panel_x1, panel_y2 - panel_r * 2, panel_x1 + panel_r * 2, panel_y2, fill=panel_fill, outline="")
-            canvas.create_oval(panel_x2 - panel_r * 2, panel_y2 - panel_r * 2, panel_x2, panel_y2, fill=panel_fill, outline="")
-            canvas.create_rectangle(panel_x1 + 10, panel_y1, panel_x2 - 10, panel_y1 + 1, fill="#86efac", outline="")
-            canvas.create_text(cx, panel_y1 + 16, text=preview, fill="#f0fdf4", font=("Segoe UI", 9, "bold"), width=190, justify="center")
-            canvas.create_text(cx, panel_y1 + 40, text=stats, fill="#bbf7d0", font=("Segoe UI", 8, "bold"), width=190, justify="center")
+            top = pill_y + 16
+            round_rect(canvas, 4, top, W - 4, top + 44, 10, fill="#0b1220", outline=deep)
+            canvas.create_text(cx, top + 14, text=ellipsize(self.particle_result_text, 40), fill="#f8fafc",
+                               font=("Segoe UI", 8), width=W - 20)
+            canvas.create_text(cx, top + 31, text=self.particle_result_stats, fill=accent,
+                               font=("Segoe UI", 8, "bold"), width=W - 16)
 
     def draw_hud(self) -> None:
         canvas = self.hud_canvas
@@ -2550,6 +2919,7 @@ class MicIconApp:
             "busy": ("#10101f", "#4338ca", "#c4b5fd", "#f5f3ff"),
             "done": ("#07170d", "#15803d", "#86efac", "#f0fdf4"),
             "error": ("#210909", "#991b1b", "#fecaca", "#fff1f2"),
+            "speak": ("#1c1206", "#b45309", "#fcd34d", "#fffbeb"),
         }
         bg, mid, accent, text_color = palettes.get(state, palettes["listen"])
         pulse = (math.sin(self.anim_tick / 2.2) + 1) / 2
@@ -2645,6 +3015,10 @@ class MicIconApp:
         if self.listening:
             self.request_stop("mic-button")
             return
+        if self.processing:
+            self.draw("busy")
+            self.show_hud("busy", "\u0110ang nh\u1eadn di\u1ec7n...", None)
+            return
         if self.pinned_target_hwnd and self.pinned_target_point:
             self.start_listening(
                 auto_stop_after_phrase=True,
@@ -2679,10 +3053,13 @@ class MicIconApp:
         auto_stop_after_phrase: bool,
         target_hwnd: int = 0,
         target_point: tuple[int, int] | None = None,
+        mode: str = "dictation",
     ) -> None:
-        if self.listening:
+        if self.listening or self.processing:
             return
+        self.session_mode = mode
         self.listening = True
+        self.processing = False
         self.capture_clicks = not auto_stop_after_phrase
         self.stop_requested = False
         self.stop_reason = ""
@@ -2696,9 +3073,10 @@ class MicIconApp:
         self.draw("listen")
         self.show_icon_near(target_point)
         self.show_particle_effect(target_point)
-        self.show_hud("listen", "\u0110ang nghe...", None)
+        self.show_hud("listen", "Em \u0111ang nghe anh..." if mode == "conversation" else "\u0110ang nghe...", None)
         beep_async("start")
         log(f"session start | id={self.active_session_id} | locked_hwnd={target_hwnd} | locked_point={target_point}")
+        self.ensure_whisper()   # nap Whisper trong luc anh dang noi
         if self.capture_clicks:
             threading.Thread(target=self.capture_target_click_worker, daemon=True).start()
         threading.Thread(target=self.listen_worker, args=(auto_stop_after_phrase, self.active_session_id), daemon=True).start()
@@ -2714,6 +3092,49 @@ class MicIconApp:
             self.microphone_device_index = index
             self.microphone_device_name = name
         return index, name
+
+    def open_microphone_source(self, session_id: int) -> tuple[sr.Microphone, int | None, str]:
+        last_error: Exception | None = None
+        for attempt, (index, name) in enumerate(microphone_device_candidates(self.settings), start=1):
+            source = sr.Microphone(device_index=index)
+            try:
+                source.__enter__()
+            except Exception as exc:
+                last_error = exc
+                log(
+                    f"mic open failed | session={session_id} | attempt={attempt} | "
+                    f"index={index} | name={name} | {type(exc).__name__}: {exc}"
+                )
+                try:
+                    source.__exit__(None, None, None)
+                except Exception:
+                    pass
+                time.sleep(0.18)
+                continue
+
+            if index != self.microphone_device_index or name != self.microphone_device_name:
+                log(
+                    f"mic reselected | session={session_id} | "
+                    f"old_index={self.microphone_device_index} | old_name={self.microphone_device_name} | "
+                    f"new_index={index} | new_name={name}"
+                )
+                self.microphone_device_index = index
+                self.microphone_device_name = name
+            if attempt > 1:
+                log(f"mic recovered | session={session_id} | attempt={attempt} | index={index} | name={name}")
+            return source, index, name
+
+        if last_error:
+            raise OSError(f"no microphone could be opened; last error: {type(last_error).__name__}: {last_error}")
+        raise OSError("no microphone devices found")
+
+    @contextlib.contextmanager
+    def microphone_source_context(self, session_id: int):
+        source, index, name = self.open_microphone_source(session_id)
+        try:
+            yield source, index, name
+        finally:
+            source.__exit__(None, None, None)
 
     def capture_target_click_worker(self) -> None:
         was_down = left_button_down()
@@ -2731,8 +3152,64 @@ class MicIconApp:
         top = self.root.winfo_y()
         return left <= x <= left + SIZE and top <= y <= top + SIZE
 
+    def ensure_whisper(self, wait: float = 0.0) -> None:
+        """Bat dau nap Whisper neu chua co; wait > 0 thi doi toi da chung do giay cho nap xong."""
+        if not self.enable_whisper_fallback:
+            return
+        self.whisper_last_used = time.time()
+        if self.whisper_model is not None:
+            return
+        loader = self.whisper_loader
+        if loader is None or not loader.is_alive():
+            loader = threading.Thread(target=self._load_whisper_model, daemon=True)
+            self.whisper_loader = loader
+            loader.start()
+        if wait > 0:
+            loader.join(wait)
+
+    def unload_idle_whisper(self) -> None:
+        try:
+            idle = time.time() - self.whisper_last_used
+            if (
+                self.whisper_model is not None
+                and self.whisper_idle_unload_seconds > 0
+                and idle >= self.whisper_idle_unload_seconds
+                and not self.listening
+                and not self.processing
+            ):
+                self.whisper_model = None
+                import gc
+                gc.collect()
+                log(f"whisper unloaded after {idle / 60:.0f} min idle (loads again on next speech)")
+        except Exception as exc:
+            log(f"whisper idle unload error: {type(exc).__name__}: {exc}")
+        self.root.after(60_000, self.unload_idle_whisper)
+
     def _load_whisper_model(self) -> None:
-        global _whisper
+        global _faster_whisper, _whisper
+        if _faster_whisper is None:
+            try:
+                from faster_whisper import WhisperModel
+                _faster_whisper = WhisperModel
+            except Exception as exc:
+                log(f"faster-whisper unavailable; trying openai-whisper | {type(exc).__name__}: {exc}")
+        if _faster_whisper is not None:
+            try:
+                log(
+                    f"loading faster-whisper {self.whisper_model_name} model "
+                    f"cpu/{self.whisper_compute_type}..."
+                )
+                self.whisper_model = _faster_whisper(
+                    self.whisper_model_name,
+                    device="cpu",
+                    compute_type=self.whisper_compute_type,
+                )
+                self.whisper_backend = "faster"
+                log(f"faster-whisper {self.whisper_model_name} model loaded")
+                return
+            except Exception as exc:
+                log(f"faster-whisper load error; trying openai-whisper | {type(exc).__name__}: {exc}")
+
         if _whisper is None:
             try:
                 import whisper as whisper_module
@@ -2746,6 +3223,7 @@ class MicIconApp:
         try:
             log(f"loading whisper {self.whisper_model_name} model...")
             self.whisper_model = _whisper.load_model(self.whisper_model_name)
+            self.whisper_backend = "openai"
             log(f"whisper {self.whisper_model_name} model loaded")
         except Exception as exc:
             log(f"whisper load error: {exc}")
@@ -2758,6 +3236,8 @@ class MicIconApp:
         recognizer = sr.Recognizer()
         recognizer.operation_timeout = GOOGLE_RECOGNITION_TIMEOUT_SECONDS
         response = recognizer.recognize_google(audio, language="vi-VN", show_all=True)
+        # giu lai moi cach nghe cua Google de do lenh ngan ("voice" hay bi nghe thanh chu khac)
+        self.last_google_alternatives = [text for text, _confidence in google_response_alternatives(response)]
         google_text, confidence, alternative_count = choose_google_alternative(response)
         if not google_text:
             raise sr.UnknownValueError()
@@ -2784,14 +3264,14 @@ class MicIconApp:
                 if text:
                     return text
                 log(f"google {label} empty | attempt={attempt} | duration={duration:.1f}s")
-                return ""
+                last_error = sr.UnknownValueError()
             except sr.UnknownValueError as exc:
                 last_error = exc
                 log(f"google {label} unrecognized | attempt={attempt} | duration={duration:.1f}s")
-                return ""
             except Exception as exc:
                 last_error = exc
                 log(f"google {label} error | attempt={attempt} | duration={duration:.1f}s | {type(exc).__name__}: {exc}")
+            if attempt < GOOGLE_CHUNK_RETRY_ATTEMPTS:
                 time.sleep(0.25 * attempt)
 
         if duration <= GOOGLE_MIN_RETRY_CHUNK_SECONDS or depth >= 2:
@@ -2814,6 +3294,29 @@ class MicIconApp:
             self._transcribe_google_resilient(right, f"{label}b", depth + 1),
         ]
         return clean_transcript(" ".join(part for part in parts if part.strip()))
+
+    def _recover_chunk_with_whisper(self, chunk_audio: sr.AudioData, index: int, total: int, speech_level: int) -> str:
+        """Google bo sot doan nay: cho Whisper nghe lai rieng doan do, tru khi doan do chi la im lang."""
+        self.ensure_whisper(wait=60)
+        if self.whisper_model is None:
+            return ""
+        duration = self._audio_duration_seconds(chunk_audio)
+        level = audio_speech_level(chunk_audio)
+        if level < max(120, speech_level * 0.45):
+            log(f"whisper chunk {index}/{total} skipped: quiet | level={level} | speech_level={speech_level}")
+            return ""
+        try:
+            text = self._transcribe_whisper(chunk_audio, vad=True).strip()
+        except Exception as exc:
+            log(f"whisper chunk {index}/{total} failed | {type(exc).__name__}: {exc}")
+            return ""
+        words = count_transcript_words(text)
+        wpm = words / max(0.1, duration / 60)
+        if not text or wpm < 30 or wpm > 330:
+            log(f"whisper chunk {index}/{total} rejected | wpm={wpm:.0f} | text={text[:60]}")
+            return ""
+        log(f"whisper chunk {index}/{total} recovered | chars={len(text)} | text={text[:80]}")
+        return text
 
     def _transcribe_google_chunked(self, audio: sr.AudioData) -> str:
         chunks = google_audio_chunks(audio)
@@ -2841,49 +3344,158 @@ class MicIconApp:
 
         parts: list[str] = []
         errors = 0
-        workers = min(3, max(1, len(chunks)))
+        workers = min(5, max(1, len(chunks)))
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             results = list(executor.map(transcribe_chunk, chunks))
 
+        chunk_audio_by_index = {index: chunk_audio for index, chunk_audio, _start, _end in chunks}
+        speech_level = audio_speech_level(audio)
+        recovered = 0
         for index, chunk_text, status in sorted(results, key=lambda item: item[0]):
             if chunk_text:
                 parts.append(chunk_text)
                 log(f"google chunk {index}/{total} ok | chars={len(chunk_text)} | text={chunk_text[:80]}")
-            else:
-                errors += 1
-                log(f"google chunk {index}/{total} {status}")
+                continue
+            log(f"google chunk {index}/{total} {status}")
+            whisper_text = self._recover_chunk_with_whisper(chunk_audio_by_index[index], index, total, speech_level)
+            if whisper_text:
+                parts.append(whisper_text)
+                recovered += 1
+                self.google_confidence_scores.append(0.85)
+                continue
+            errors += 1
+            # Missing audio is a real accuracy loss. Count it in the session
+            # confidence instead of reporting a misleadingly high average
+            # based only on chunks Google happened to recognize.
+            self.google_confidence_scores.append(0.0)
 
         text = merge_transcript_parts(parts)
         if text:
             log(
                 f"transcribe engine=google-chunked | chunks={len(parts)}/{total} | "
-                f"errors={errors} | workers={workers} | text={text[:80]}"
+                f"whisper_recovered={recovered} | errors={errors} | workers={workers} | text={text[:80]}"
             )
             return text
         raise sr.UnknownValueError()
 
-    def _transcribe_audio(self, audio: sr.AudioData) -> str:
-        """Transcribe Vietnamese speech. Prefer Google for dictation accuracy, fallback to Whisper offline."""
-        duration = self._audio_duration_seconds(audio)
+    def _transcribe_google_candidate(self, audio: sr.AudioData, duration: float) -> tuple[str, float | None]:
         self.google_confidence_scores.clear()
+        if duration > GOOGLE_SINGLE_PASS_MAX_SECONDS:
+            log(f"long audio detected; using google chunks | duration={duration:.1f}s")
+            google_text = self._transcribe_google_chunked(audio)
+        else:
+            google_text = self._transcribe_google_once(audio)
+        avg_confidence = (
+            sum(self.google_confidence_scores) / len(self.google_confidence_scores)
+            if self.google_confidence_scores
+            else None
+        )
+        log(
+            f"transcribe engine=google | confidence_avg={format_confidence_percent(avg_confidence)} | "
+            f"text={google_text[:80]}"
+        )
+        return google_text, avg_confidence
+
+    def _choose_hybrid_transcript(
+        self,
+        google_text: str,
+        google_confidence: float | None,
+        whisper_text: str,
+        duration: float,
+    ) -> str:
+        google_score = transcript_selection_score(google_text)
+        whisper_score = transcript_selection_score(whisper_text)
+        if google_confidence is not None:
+            google_score += min(0.035, max(0.0, google_confidence - 0.86) * 0.16)
+        google_words = count_transcript_words(google_text)
+        whisper_words = count_transcript_words(whisper_text)
+        if google_words and whisper_words:
+            ratio = min(google_words, whisper_words) / max(google_words, whisper_words)
+            if ratio < 0.45:
+                if google_words > whisper_words:
+                    google_score += 0.04
+                else:
+                    whisper_score += 0.04
+        log(
+            f"strict hybrid score | google={google_score:.3f} | whisper={whisper_score:.3f} | "
+            f"google_confidence={format_confidence_percent(google_confidence)} | duration={duration:.1f}s"
+        )
+        if whisper_text and whisper_score >= google_score + WHISPER_SELECTION_MARGIN:
+            log(f"strict hybrid selected whisper | text={whisper_text[:100]}")
+            return whisper_text
+        if google_text:
+            log(f"strict hybrid selected google | text={google_text[:100]}")
+            return google_text
+        return whisper_text
+
+    def _transcribe_strict_hybrid(self, audio: sr.AudioData, duration: float) -> str:
+        google_text = ""
+        google_confidence: float | None = None
+        whisper_text = ""
+
+        def google_job() -> tuple[str, float | None]:
+            return self._transcribe_google_candidate(audio, duration)
+
+        def whisper_job() -> str:
+            return self._transcribe_whisper(audio)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            google_future = executor.submit(google_job)
+            whisper_future = executor.submit(whisper_job)
+            try:
+                whisper_text = whisper_future.result()
+            except sr.UnknownValueError:
+                log("strict hybrid whisper unrecognized")
+            except Exception as exc:
+                log(f"strict hybrid whisper error | {type(exc).__name__}: {exc}")
+            try:
+                google_text, google_confidence = google_future.result()
+            except sr.UnknownValueError:
+                log("strict hybrid google unrecognized")
+            except Exception as exc:
+                log(f"strict hybrid google error | {type(exc).__name__}: {exc}")
+
+        if google_text and whisper_text:
+            return self._choose_hybrid_transcript(google_text, google_confidence, whisper_text, duration)
+        if whisper_text:
+            log(f"strict hybrid only whisper | text={whisper_text[:100]}")
+            return whisper_text
+        if google_text:
+            log(f"strict hybrid only google | text={google_text[:100]}")
+            return google_text
+        raise sr.UnknownValueError()
+
+    def _transcribe_audio(self, audio: sr.AudioData) -> str:
+        """Transcribe Vietnamese speech quickly; verify with Whisper only when Google looks risky."""
+        duration = self._audio_duration_seconds(audio)
         google_candidate = ""
+        google_avg_confidence: float | None = None
+        self.last_transcript_whisper_only = False
+        self.last_google_alternatives: list[str] = []
+
         try:
-            if duration > GOOGLE_SINGLE_PASS_MAX_SECONDS:
-                log(f"long audio detected; using google chunks | duration={duration:.1f}s")
-                google_text = self._transcribe_google_chunked(audio)
-            else:
-                google_text = self._transcribe_google_once(audio)
+            google_text, avg_confidence = self._transcribe_google_candidate(audio, duration)
             if google_text:
                 google_candidate = google_text
-                avg_confidence = (
-                    sum(self.google_confidence_scores) / len(self.google_confidence_scores)
-                    if self.google_confidence_scores
-                    else None
+                google_avg_confidence = avg_confidence
+                should_try_whisper = (
+                    self.whisper_model is not None
+                    and (
+                        transcript_suspicion_penalty(google_text) > 0
+                        or (
+                            avg_confidence is not None
+                            and avg_confidence < GOOGLE_LOW_CONFIDENCE_FALLBACK_THRESHOLD
+                        )
+                    )
                 )
-                log(
-                    f"transcribe engine=google | confidence_avg={format_confidence_percent(avg_confidence)} | "
-                    f"text={google_text[:80]}"
-                )
+                if should_try_whisper:
+                    log(
+                        f"whisper verification requested | duration={duration:.1f}s | "
+                        f"google_confidence={format_confidence_percent(avg_confidence)} | "
+                        f"suspicion={transcript_suspicion_penalty(google_text):.2f}"
+                    )
+                else:
+                    return google_text
                 if (
                     avg_confidence is not None
                     and avg_confidence < GOOGLE_LOW_CONFIDENCE_FALLBACK_THRESHOLD
@@ -2894,8 +3506,6 @@ class MicIconApp:
                         f"confidence={format_confidence_percent(avg_confidence)} | "
                         f"threshold={GOOGLE_LOW_CONFIDENCE_FALLBACK_THRESHOLD * 100:.0f}%"
                     )
-                else:
-                    return google_text
         except sr.UnknownValueError:
             log("google unrecognized; falling back to whisper")
         except Exception as exc:
@@ -2911,18 +3521,59 @@ class MicIconApp:
                     log(f"google chunk retry failed: {type(retry_exc).__name__}: {retry_exc}")
             log("falling back to whisper")
 
+        self.ensure_whisper(wait=60)
         if self.whisper_model is None:
             if google_candidate:
                 return google_candidate
             raise sr.UnknownValueError()
 
+        whisper_text = self._transcribe_whisper(audio, google_candidate)
+        if google_candidate:
+            google_score = transcript_selection_score(google_candidate)
+            whisper_score = transcript_selection_score(whisper_text)
+            log(
+                f"hybrid score | google={google_score:.3f} | whisper={whisper_score:.3f} | "
+                f"google_confidence={format_confidence_percent(google_avg_confidence)}"
+            )
+            if whisper_text and whisper_score >= google_score + WHISPER_SELECTION_MARGIN:
+                log(f"hybrid selected whisper | text={whisper_text[:100]}")
+                return whisper_text
+            log(f"hybrid kept google | text={google_candidate[:100]}")
+            return google_candidate
+        # Google khong nghe ra chu nao, chi con Whisper doan: danh dau de chan cau doan bua
+        self.last_transcript_whisper_only = True
+        return whisper_text
+
+    def _transcribe_whisper(self, audio: sr.AudioData, google_candidate: str = "", vad: bool = False) -> str:
+        model = self.whisper_model   # giu tham chieu: bo nha luc ranh co the dat self.whisper_model = None
+        if model is None:
+            raise sr.UnknownValueError()
+        self.whisper_last_used = time.time()
         wav_data = audio.get_wav_data()
         try:
             tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
             try:
                 tmp.write(wav_data)
                 tmp.close()
-                result = self.whisper_model.transcribe(
+                if self.whisper_backend == "faster":
+                    segments, info = model.transcribe(
+                        tmp.name,
+                        language="vi",
+                        beam_size=5,
+                        vad_filter=vad,
+                        condition_on_previous_text=False,
+                        temperature=0,
+                    )
+                    whisper_text = clean_transcript(" ".join(segment.text.strip() for segment in segments))
+                    log(
+                        f"faster-whisper language={getattr(info, 'language', 'n/a')} | "
+                        f"prob={getattr(info, 'language_probability', 0):.2f} | text={whisper_text[:80]}"
+                    )
+                    if not whisper_text:
+                        raise sr.UnknownValueError()
+                    return whisper_text
+
+                result = model.transcribe(
                     tmp.name,
                     language="vi",
                     task="transcribe",
@@ -2934,7 +3585,6 @@ class MicIconApp:
                     no_speech_threshold=0.75,
                     logprob_threshold=-1.0,
                     compression_ratio_threshold=2.4,
-                    initial_prompt=whisper_initial_prompt(),
                 )
                 # Ignore likely Whisper hallucination when it is not confident that speech exists.
                 segments = result.get("segments", [])
@@ -2964,6 +3614,7 @@ class MicIconApp:
     def listen_worker(self, auto_stop_after_phrase: bool = False, session_id: int = 0) -> None:
         target_hwnd = self.active_target_hwnd or self.last_target_hwnd
         target_point = self.active_target_point or self.last_click_point
+        session_mode = self.session_mode
         listen_started = time.monotonic()
         last_activity_at = listen_started
         stop_reason = "completed"
@@ -2977,8 +3628,7 @@ class MicIconApp:
         sample_width = 2
         particle_result_scheduled = False
         try:
-            mic_index, mic_name = self.refresh_microphone_device(session_id)
-            with sr.Microphone(device_index=mic_index) as source:
+            with self.microphone_source_context(session_id) as (source, mic_index, mic_name):
                 self.recognizer.energy_threshold = 120
                 self.recognizer.dynamic_energy_threshold = False
                 self.recognizer.pause_threshold = 1.2
@@ -2994,7 +3644,7 @@ class MicIconApp:
                 )
 
                 # Measure noise briefly so speech right after activation is not treated as background.
-                noise_until = time.monotonic() + 0.35
+                noise_until = time.monotonic() + 0.2
                 noise_samples: list[int] = []
                 while time.monotonic() < noise_until and not self.stop_requested:
                     data = read_audio_chunk(source.stream, source.CHUNK)
@@ -3065,8 +3715,15 @@ class MicIconApp:
                         trailing_timeout = WEBRTC_VOICE_END_SECONDS if voice_vad else RMS_VOICE_END_SECONDS
                     else:
                         trailing_timeout = WEBRTC_SHORT_VOICE_END_SECONDS if voice_vad else RMS_SHORT_VOICE_END_SECONDS
-                    can_auto_stop = now - speech_started_at >= MIN_CAPTURE_BEFORE_AUTO_STOP_SECONDS
-                    if speech_started and can_auto_stop and now - last_activity_at > trailing_timeout:
+                    silence_age = now - last_activity_at
+                    can_auto_stop = (
+                        now - speech_started_at >= MIN_CAPTURE_BEFORE_AUTO_STOP_SECONDS
+                        and (
+                            capture_age >= MIN_CAPTURE_BEFORE_SILENCE_STOP_SECONDS
+                            or silence_age >= max(trailing_timeout, 2.0)
+                        )
+                    )
+                    if speech_started and can_auto_stop and silence_age > trailing_timeout:
                         stop_reason = "silence"
                         log(
                             f"auto stop after trailing silence | id={session_id} | "
@@ -3082,10 +3739,34 @@ class MicIconApp:
                 capture_finished_at = time.monotonic()
                 self.audio_level_target = 0.0
 
+            self.listening = False
+            self.capture_clicks = False
+            self.processing = bool(audio_frames)
+            log(
+                f"capture complete | id={session_id} | frames={len(audio_frames)} | "
+                f"reason={stop_reason} | processing={self.processing}"
+            )
+
             if self.stop_requested and audio_frames:
                 stop_reason = self.stop_reason or "requested"
                 capture_finished_at = time.monotonic()
                 log(f"finish requested; transcribing captured audio | id={session_id} | frames={len(audio_frames)}")
+
+            if self.discard_session_id == session_id:
+                # phien bi huy vi anh Alt + bam dup de mo tro chuyen
+                self.discard_session_id = 0
+                log(f"session discarded | id={session_id} | frames={len(audio_frames)}")
+                return
+
+            if session_mode == "conversation":
+                conversation = self.conversation
+                if conversation is None or not conversation.active:
+                    log(f"voice chat listen discarded: conversation ended | id={session_id}")
+                    return
+                if not audio_frames:
+                    log(f"voice chat silence | id={session_id} | reason={stop_reason}")
+                    conversation.handle_silence()
+                    return
 
             if not audio_frames:
                 self.root.after(0, lambda: self.draw("idle"))
@@ -3099,6 +3780,10 @@ class MicIconApp:
             self.root.after(0, lambda: self.draw("busy"))
             self.root.after(0, lambda sid=session_id: self.show_hud("busy", f"\u0110ang nh\u1eadn di\u1ec7n #{sid}", None))
             audio = sr.AudioData(b"".join(audio_frames), sample_rate, sample_width)
+            log(
+                f"transcribe start | id={session_id} | reason={stop_reason} | "
+                f"frames={len(audio_frames)} | capture_wait={(capture_finished_at - last_activity_at):.2f}s"
+            )
             save_last_audio(
                 audio,
                 {
@@ -3108,10 +3793,69 @@ class MicIconApp:
                     "frames": len(audio_frames),
                 },
             )
-            final_text = self._transcribe_audio(audio).strip()
+            speech_seconds = max(0.1, capture_finished_at - (speech_started_at or listen_started))
+            english_future = None
+            if (
+                session_mode == "dictation"
+                and speech_seconds <= SHORT_COMMAND_MAX_SECONDS
+                and bool(self.settings_value("enable_voice_commands", True))
+            ):
+                # Cau ngan co the la lenh "voice": nghe them mot lan bang tieng Anh, chay song song
+                english_future = self.command_pool.submit(google_transcripts, audio, "en-US")
+            try:
+                final_text = self._transcribe_audio(audio).strip()
+            except sr.UnknownValueError:
+                final_text = ""
             api_ms = int((time.monotonic() - t_api) * 1000)
+
+            command = self.voice_command(final_text) if session_mode == "dictation" and final_text else None
+            if command is None and english_future is not None:
+                try:
+                    english_candidates = english_future.result(timeout=8)
+                except Exception:
+                    english_candidates = []
+                # cac cach nghe du phong cua Google tieng Viet, roi den luot nghe tieng Anh
+                for candidate in [*self.last_google_alternatives[1:], *english_candidates]:
+                    command = self.voice_command(candidate)
+                    if command:
+                        log(f"voice command from alternate hearing | id={session_id} | heard={candidate} | vi={final_text}")
+                        final_text = candidate
+                        break
             if not final_text:
                 raise sr.UnknownValueError()
+
+            if command is None and self.last_transcript_whisper_only:
+                # Google khong nghe ra, Whisper chi doan duoc vai chu cho ca doan dai: thuong la tieng on
+                guessed_words = count_transcript_words(final_text)
+                guessed_wpm = guessed_words / (speech_seconds / 60)
+                if guessed_words <= 5 and guessed_wpm < 45:
+                    log(
+                        f"whisper guess rejected | id={session_id} | text={final_text} | "
+                        f"words={guessed_words} | wpm={guessed_wpm:.0f}"
+                    )
+                    raise sr.UnknownValueError()
+
+            if session_mode == "conversation":
+                log(f"voice chat heard | id={session_id} | text={final_text}")
+                self.root.after(0, self.hide_particle_effect)
+                particle_result_scheduled = True
+                if self.conversation is not None and self.conversation.active:
+                    self.conversation.handle_user_text(final_text)
+                return
+
+            if command == "voice":
+                log(f"voice command: start conversation | id={session_id} | text={final_text}")
+                self.root.after(0, self.hide_particle_effect)
+                particle_result_scheduled = True
+                self.root.after(0, lambda h=target_hwnd, p=target_point: self.start_voice_conversation(h, p))
+                return
+            if command == "keep":
+                log(f"voice command: keep dictation | id={session_id} | text={final_text}")
+                self.root.after(0, self.hide_particle_effect)
+                particle_result_scheduled = True
+                self.root.after(0, lambda: self.show_hud("listen", "Anh nói đi, em gõ chữ", None))
+                self.start_listening_when_free(True, target_hwnd, target_point, "dictation")
+                return
 
             beep_async("done")
             communication_seconds = max(0.1, capture_finished_at - (speech_started_at or listen_started))
@@ -3122,7 +3866,7 @@ class MicIconApp:
                 else None
             )
             confidence_text = format_confidence_percent(avg_confidence)
-            stats_text = f"{wpm} t\u1eeb/ph\u00fat | {char_count} k\u00fd t\u1ef1 | tin c\u1eady {confidence_text}"
+            stats_text = f"{char_count} ký tự · {word_count} từ · {wpm} từ/phút · tin cậy {confidence_text}"
             log(
                 f"session transcript | id={session_id} | text={final_text} | api={api_ms}ms | "
                 f"frames={len(audio_frames)} | wpm={wpm} | words={word_count} | chars={char_count} | "
@@ -3142,20 +3886,26 @@ class MicIconApp:
             )
             keep_transcript_on_clipboard(final_text, "recognized")
             learn_context_terms(final_text)
-            self.root.after(0, lambda t=final_text, hw=target_hwnd, pt=target_point:
-                self.paste_chunk(t, hw, pt, click_to_focus=True))
+            # Clipboard/focus work does not require Tk. Run it immediately in
+            # the worker so an animation-heavy Tk queue cannot delay delivery.
+            self.paste_chunk(final_text, target_hwnd, target_point, click_to_focus=True)
             self.remember_voice_target(target_hwnd, target_point)
             particle_result_scheduled = True
-            self.root.after(0, lambda t=final_text, s=stats_text, pt=target_point: self.show_particle_result(t, s, pt, 2800))
-            self.root.after(2800, lambda: self.draw("idle"))
-            self.root.after(2800, self.hide_hud)
-            self.root.after(2800, self.root.withdraw)
+            self.root.after(0, lambda t=final_text, s=stats_text, pt=target_point: self.show_particle_result(t, s, pt, RESULT_SHOW_MS))
+            self.root.after(RESULT_SHOW_MS, lambda: self.draw("idle"))
+            self.root.after(RESULT_SHOW_MS, self.hide_hud)
+            self.root.after(RESULT_SHOW_MS, self.root.withdraw)
             log(
                 f"session done | id={session_id} | frames={len(audio_frames)} | hwnd={target_hwnd} | "
                 f"reason={stop_reason} | stats={stats_text}"
             )
         except Exception as exc:
             log(f"session error | id={session_id} | {type(exc).__name__}: {exc}")
+            conversation = self.conversation
+            if session_mode == "conversation" and conversation is not None and conversation.active:
+                # tro chuyen: nghe khong ro thi tro ly hoi lai, khong bao loi
+                conversation.handle_unclear()
+                return
             beep_async("error")
             self.root.after(0, lambda: self.draw("error"))
             self.root.after(0, lambda: self.show_hud("error", "Th\u1eed l\u1ea1i g\u1ea7n micro h\u01a1n", 1200))
@@ -3168,8 +3918,384 @@ class MicIconApp:
             self.capture_clicks = False
             self.stop_requested = False
             self.listening = False
+            self.processing = False
             self.active_target_hwnd = 0
             self.active_target_point = None
+
+    # ------------------------------------------------------------ che do tro chuyen (lenh "voice")
+    def voice_command(self, text: str) -> str | None:
+        if not bool(self.settings_value("enable_voice_commands", True)):
+            return None
+        try:
+            from reader.assistant import detect_command
+        except Exception as exc:
+            log(f"voice command unavailable: {type(exc).__name__}: {exc}")
+            return None
+        return detect_command(text)
+
+    def start_listening_when_free(
+        self, auto_stop: bool, target_hwnd: int, target_point: tuple[int, int] | None, mode: str, tries: int = 0
+    ) -> None:
+        """Phien nghe cu co the chua don xong; doi mot chut roi moi mo phien moi."""
+        def attempt() -> None:
+            if self.listening or self.processing:
+                if tries < 60:
+                    self.start_listening_when_free(auto_stop, target_hwnd, target_point, mode, tries + 1)
+                return
+            if mode == "conversation" and (self.conversation is None or not self.conversation.active):
+                return
+            self.start_listening(auto_stop_after_phrase=auto_stop, target_hwnd=target_hwnd,
+                                 target_point=target_point, mode=mode)
+        self.root.after(0 if tries == 0 else 100, attempt)
+
+    def start_voice_conversation(self, target_hwnd: int, target_point: tuple[int, int] | None) -> None:
+        if self.conversation is not None:
+            return
+        try:
+            from reader.assistant import Conversation
+        except Exception as exc:
+            log(f"voice chat import error: {type(exc).__name__}: {exc}")
+            self.show_hud("error", "Chưa bật được voice", 1800)
+            return
+
+        def on_state(state: str, message: str) -> None:
+            self.root.after(0, lambda: (self.draw("busy"), self.show_hud(state, message, None)))
+
+        def listen_again() -> None:
+            self.start_listening_when_free(True, target_hwnd, target_point, "conversation")
+
+        def on_end() -> None:
+            self.root.after(0, self.end_voice_conversation_ui)
+
+        self.conversation = Conversation(self.settings, on_state, listen_again, on_end, log)
+        log(f"voice chat start | hwnd={target_hwnd} | point={target_point}")
+        self.conversation.start()
+
+    # ------------------------------------------------------------ vong tron chon che do
+    def handle_alt_press(self, point: tuple[int, int]) -> None:
+        """Alt + click: dang doc/noi thi dieu khien phien do, con lai hien vong tron chon che do."""
+        if self.listening:
+            self.request_stop("alt-click")
+            log(f"alt-click stops listening | session={self.active_session_id} | point={point}")
+            return
+        if self.processing:
+            log(f"alt-click ignored: session processing | point={point}")
+            return
+        conversation = self.conversation
+        if conversation is not None and conversation.active:
+            if conversation.paused:
+                log("voice chat resumed by alt-click")
+                conversation.resume()
+            elif conversation.speaking:
+                conversation.interrupt()
+                log("voice chat interrupted by alt-click")
+            return
+        if self.reading is not None:
+            self.reading.toggle_pause()
+            log("read aloud toggled by alt-click")
+            return
+        hwnd = foreground_window()
+        if not hwnd or hwnd in {self.app_hwnd, self.hud_hwnd, self.particle_hwnd, self.radial_hwnd}:
+            return
+        if not bool(self.settings_value("enable_radial_menu", True)):
+            self.try_alt_click_listen_from_click(point)
+            return
+        self.radial_target_hwnd = hwnd
+        self.radial_dragging = True  # neu anh giu chuot keo toi o roi tha thi chon luon
+        self.open_radial_menu(point)
+
+    def point_in_radial(self, point: tuple[int, int]) -> bool:
+        return math.hypot(point[0] - self.radial_center[0], point[1] - self.radial_center[1]) <= RADIAL_OUTER + 4
+
+    def open_radial_menu(self, point: tuple[int, int]) -> None:
+        self.radial_open = True
+        self.radial_closing = False
+        self.radial_choice = None
+        self.radial_anchor = point
+        self.radial_opened_at = time.monotonic()
+        self.radial_press_inside = False
+        self.radial_hover = {key: 0.0 for key, *_rest in RADIAL_OPTIONS}
+        screen_left, screen_top, screen_right, screen_bottom = virtual_screen_rect()
+        half = RADIAL_SIZE // 2
+        x = max(screen_left, min(point[0] - half, screen_right - RADIAL_SIZE))
+        y = max(screen_top, min(point[1] - half, screen_bottom - RADIAL_SIZE))
+        self.radial_center = (x + half, y + half)
+        self.radial.geometry(f"{RADIAL_SIZE}x{RADIAL_SIZE}+{x}+{y}")
+        try:
+            self.radial.attributes("-alpha", 0.0)
+        except tk.TclError:
+            pass
+        self.draw_radial_menu()
+        self.radial.deiconify()
+        self.radial.lift()
+        beep_async("chunk")
+        log(f"radial menu open | point={point}")
+        if not getattr(self, "radial_animating", False):
+            self.radial_animating = True
+            self.root.after(RADIAL_FRAME_MS, self.animate_radial_menu)
+
+    def animate_radial_menu(self) -> None:
+        """Vong lap ve hieu ung khi vong tron dang mo hoac dang dong."""
+        if not self.radial_open and not self.radial_closing:
+            self.radial_animating = False
+            return
+        now = time.monotonic()
+        if self.radial_closing:
+            progress = (now - self.radial_closed_at) / RADIAL_CLOSE_SECONDS
+            if progress >= 1:
+                self.radial_closing = False
+                self.radial_animating = False
+                self.radial.withdraw()
+                return
+        for key in self.radial_hover:
+            target = 1.0 if key == self.radial_choice else 0.0
+            self.radial_hover[key] += (target - self.radial_hover[key]) * 0.32
+        try:
+            self.radial.attributes("-alpha", 0.97 * self.radial_visibility())
+        except tk.TclError:
+            pass
+        self.draw_radial_menu()
+        self.root.after(RADIAL_FRAME_MS, self.animate_radial_menu)
+
+    def radial_visibility(self) -> float:
+        """0..1: muc hien cua vong tron (luc hien len va luc dong lai)."""
+        now = time.monotonic()
+        if getattr(self, "radial_closing", False):
+            t = min(1.0, (now - self.radial_closed_at) / RADIAL_CLOSE_SECONDS)
+            return 1 - t * t
+        t = min(1.0, (now - getattr(self, "radial_opened_at", now)) / RADIAL_OPEN_SECONDS)
+        return 1 - (1 - t) ** 3
+
+    def point_in_radial(self, point: tuple[int, int]) -> bool:
+        return math.hypot(point[0] - self.radial_center[0], point[1] - self.radial_center[1]) <= RADIAL_OUTER + 4
+
+    def update_radial_menu(self, point: tuple[int, int]) -> None:
+        dx = point[0] - self.radial_center[0]
+        dy = self.radial_center[1] - point[1]
+        distance = math.hypot(dx, dy)
+        choice: str | None = None
+        if RADIAL_INNER - 4 < distance <= RADIAL_OUTER + 60:
+            angle = math.degrees(math.atan2(dy, dx)) % 360
+            for key, _label, _sub, start in RADIAL_OPTIONS:
+                if (angle - start) % 360 < 90:
+                    choice = key
+                    break
+        if choice != self.radial_choice:
+            if choice is not None:
+                beep_async("tick")
+            self.radial_choice = choice  # vong lap hieu ung se ve lai
+
+    def close_radial_menu(self, reason: str = "") -> None:
+        was_open = self.radial_open
+        self.radial_open = False
+        self.radial_press_inside = False
+        self.radial_dragging = False
+        if was_open and reason.startswith("choice"):
+            # chon xong: thu nho + mo di trong tich tac, lua chon van chay ngay
+            self.radial_closing = True
+            self.radial_closed_at = time.monotonic()
+            if not getattr(self, "radial_animating", False):
+                self.radial_animating = True
+                self.root.after(RADIAL_FRAME_MS, self.animate_radial_menu)
+        else:
+            self.radial_closing = False
+            self.radial.withdraw()
+            self.radial.update_idletasks()
+        if reason and not reason.startswith("choice"):
+            log(f"radial menu closed | reason={reason}")
+
+    def draw_radial_menu(self) -> None:
+        canvas = self.radial_canvas
+        canvas.delete("all")
+        visibility = MicIconApp.radial_visibility(self) if hasattr(self, "radial_opened_at") else 1.0
+        hover = getattr(self, "radial_hover", None) or {
+            key: (1.0 if key == self.radial_choice else 0.0) for key, *_rest in RADIAL_OPTIONS
+        }
+        closing = getattr(self, "radial_closing", False)
+        scale = (0.72 + 0.28 * visibility) if not closing else (0.86 + 0.14 * visibility)
+        c = RADIAL_SIZE / 2
+        r_out, r_in = RADIAL_OUTER * scale, RADIAL_INNER * scale
+        tick = time.monotonic()
+
+        # nen vong tron
+        canvas.create_oval(c - r_out - 2, c - r_out - 2, c + r_out + 2, c + r_out + 2, fill="#0b1220", outline="#334155", width=1)
+
+        # cac o: o dang tro phong ra, chuyen mau cam muot, co vien sang
+        for key, label, sub, start in RADIAL_OPTIONS:
+            h = hover.get(key, 0.0)
+            radius = r_out + h * 6
+            fill = mix_color(RADIAL_IDLE, RADIAL_ACTIVE, h)
+            canvas.create_arc(c - radius, c - radius, c + radius, c + radius, start=start + 2, extent=86,
+                              style="pieslice", fill=fill, outline="")
+            if h > 0.05:
+                glow = radius + 3
+                canvas.create_arc(c - glow, c - glow, c + glow, c + glow, start=start + 4, extent=82,
+                                  style="arc", outline=mix_color("#0b1220", RADIAL_GLOW, h), width=2)
+            angle = math.radians(start + 45)
+            text_radius = (r_out + r_in) / 2 + 3 + h * 3
+            tx, ty = c + text_radius * math.cos(angle), c - text_radius * math.sin(angle)
+            canvas.create_text(tx, ty - (6 if sub else 0), text=label, fill=mix_color("#d5dde8", "#ffffff", h),
+                               font=("Segoe UI", 9 if h < 0.5 else 10, "bold"))
+            if sub:
+                canvas.create_text(tx, ty + 8, text=sub, fill=mix_color("#7f8ca1", "#ffedd5", h), font=("Segoe UI", 7))
+
+        # cham sang chay quanh vanh (kem vet mo dan)
+        orbit = r_out + 2
+        base = (tick * 2.2) % math.tau
+        for step in range(5):
+            a = base - step * 0.09
+            dot = 2.6 - step * 0.45
+            px, py = c + orbit * math.cos(a), c - orbit * math.sin(a)
+            canvas.create_oval(px - dot, py - dot, px + dot, py + dot,
+                               fill=mix_color(RADIAL_GLOW, "#0b1220", step / 5), outline="")
+
+        # tam: vien nhip tho, sang cam khi dang chon
+        any_hover = max(hover.values()) if hover else 0.0
+        breath = (math.sin(tick * 4.2) + 1) / 2
+        ring = mix_color("#475569", RADIAL_GLOW, max(any_hover, breath * 0.35))
+        canvas.create_oval(c - r_in, c - r_in, c + r_in, c + r_in, fill="#0b1220", outline=ring, width=2 if any_hover > 0.5 else 1)
+        center_label = {"dictation": "Gõ chữ", "reader": "Đọc", "chat": "Nói", "cancel": "Huỷ"}.get(self.radial_choice, "Chọn")
+        canvas.create_text(c, c - 4, text=center_label, fill="#f8fafc", font=("Segoe UI", 8, "bold"))
+        canvas.create_text(c, c + 8, text="thả để chọn" if self.radial_choice else "Esc huỷ", fill="#7f8ca1",
+                           font=("Segoe UI", 6))
+
+    def run_radial_choice(self, choice: str | None, point: tuple[int, int]) -> None:
+        log(f"radial menu choice | choice={choice} | point={point}")
+        if choice in (None, "dictation"):
+            # giu nguyen: noi thanh chu vao khung chat
+            self.try_alt_click_listen_from_click(point)
+        elif choice == "chat":
+            self.start_voice_conversation(self.radial_target_hwnd or foreground_window(), point)
+        elif choice == "reader":
+            target = self.radial_target_hwnd
+            threading.Thread(target=self.read_selection_worker, args=(target,), daemon=True).start()
+        else:
+            self.show_hud("done", "Đã huỷ", 700)
+
+    # ------------------------------------------------------------ "Doc": doc to doan anh boi den / vua copy
+    def grab_text_for_reading(self, target_hwnd: int) -> bool:
+        """Lay doan anh boi den (gui Ctrl+C) hoac doan anh vua copy. Tra ve True neu clipboard co noi dung cua anh."""
+        before = clipboard_sequence()
+        if target_hwnd and window_exists(target_hwnd) and foreground_window() == target_hwnd:
+            keybd(VK_CONTROL)
+            keybd(VK_C)
+            keybd(VK_C, KEYEVENTF_KEYUP)
+            keybd(VK_CONTROL, KEYEVENTF_KEYUP)
+            for _ in range(8):
+                time.sleep(0.05)
+                if clipboard_sequence() != before:
+                    break
+        now = clipboard_sequence()
+        if now != before:
+            log("read aloud source: selection")
+            return bool(get_clipboard_text().strip())
+        if now != LAST_OWN_CLIPBOARD_SEQ[0] and get_clipboard_text().strip():
+            log("read aloud source: clipboard")
+            return True
+        return False
+
+    def read_selection_worker(self, target_hwnd: int) -> None:
+        def hud(state: str, message: str, ms: int | None = None) -> None:
+            self.root.after(0, lambda: self.show_hud(state, message, ms))
+
+        try:
+            if not self.grab_text_for_reading(target_hwnd):
+                hud("error", "Bôi đen hoặc copy đoạn cần nghe trước", 2600)
+                log("read aloud: nothing selected or copied; opening doc reader")
+                self.root.after(2700, self.open_doc_reader)  # mo Tro ly doc de anh dan hoac keo file vao
+                return
+            hud("busy", "Đang chuẩn bị đọc...", None)
+            doc = reader_import_clipboard()
+        except Exception as exc:
+            log(f"read aloud prepare error: {type(exc).__name__}: {exc}")
+            reason = str(exc) if isinstance(exc, RuntimeError) and str(exc) else "thử lại"
+            hud("error", f"Chưa đọc được: {reason}", 3500)
+            return
+        blocks = doc.get("blocks", [])
+        sentences = [s["t"] for s in doc.get("sentences", []) if blocks[s["b"]]["type"] != "code"]
+        log(f"read aloud start | doc={doc.get('id')} | title={str(doc.get('title'))[:60]} | sentences={len(sentences)}")
+        hud("speak", f"Đọc: {doc.get('title', '')}", None)
+        self.root.after(0, lambda: self.start_read_aloud(sentences))
+
+    def start_read_aloud(self, sentences: list[str]) -> None:
+        if self.reading is not None:
+            self.reading.stop()
+        from reader.assistant import ReadAloud
+
+        def on_state(state: str, message: str) -> None:
+            self.root.after(0, lambda: (self.draw("busy"), self.show_hud(state, message, None)))
+
+        def on_end() -> None:
+            def done() -> None:
+                if self.reading is reader:
+                    self.reading = None
+                self.draw("idle")
+                self.show_hud("done", "Đã đọc xong", 900)
+                self.root.after(900, self.hide_hud)
+            self.root.after(0, done)
+
+        reader = ReadAloud(sentences, self.settings, on_state, on_end, log)
+        self.reading = reader
+        reader.start()
+
+    def open_doc_reader(self) -> None:
+        """Chuyen sang Tro ly doc: dua cua so dang mo len truoc, chua mo thi khoi dong."""
+        window = find_window_by_title("Trợ lý đọc")
+        if window:
+            user32.ShowWindow(window, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(window)
+            self.show_hud("done", "Mở Trợ lý đọc", 900)
+            log(f"doc reader focused | hwnd={window}")
+            return
+        script = APP_DIR / "doc_reader.py"
+        if not script.exists():
+            self.show_hud("error", "Không thấy Trợ lý đọc", 1500)
+            log("doc reader missing: doc_reader.py")
+            return
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        executable = str(pythonw if pythonw.exists() else sys.executable)
+        subprocess.Popen(
+            [executable, "-X", "utf8", str(script)], cwd=str(APP_DIR),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        self.show_hud("done", "Đang mở Trợ lý đọc...", 1500)
+        log("doc reader launched")
+
+    def toggle_voice_conversation_hotkey(self) -> None:
+        if self.reading is not None:
+            self.reading.toggle_pause()
+            return
+        conversation = self.conversation
+        if conversation is not None:
+            # dang tro chuyen: phim tat de tam dung / noi tiep (tat han bang Esc hoac noi "thoi")
+            if conversation.paused:
+                log("voice chat hotkey: resume")
+                conversation.resume()
+            else:
+                log("voice chat hotkey: pause")
+                if self.listening:
+                    self.discard_session_id = self.active_session_id
+                    self.request_stop("voice-chat-pause")
+                conversation.pause()
+            return
+        if self.listening:
+            # dang doc chu thi bo phien do, chuyen sang tro chuyen
+            self.discard_session_id = self.active_session_id
+            self.request_stop("voice-chat-hotkey")
+        hwnd = foreground_window()
+        point = cursor_position()
+        log(f"voice chat hotkey: start | hwnd={hwnd} | point={point}")
+        self.start_voice_conversation(hwnd, point)
+
+    def end_voice_conversation_ui(self) -> None:
+        self.conversation = None
+        log("voice chat end")
+        if self.listening:
+            self.request_stop("voice-chat-end")
+        self.draw("idle")
+        self.show_hud("done", "Đã tắt voice", 900)
+        self.root.after(900, self.hide_hud)
+        self.root.after(900, self.root.withdraw)
 
     def paste_result(self, text: str, target_hwnd: int, target_point: tuple[int, int] | None) -> None:
         try:
@@ -3189,7 +4315,7 @@ class MicIconApp:
             if not set_clipboard_text_retry(text):
                 log(f"chunk paste skipped: clipboard busy; text={text[:120]}")
                 return
-            time.sleep(0.05)
+            time.sleep(0.02)
             current_hwnd = foreground_window()
             needs_refocus = click_to_focus or (target_hwnd and current_hwnd != target_hwnd)
             if needs_refocus:
@@ -3201,7 +4327,7 @@ class MicIconApp:
                 f"focused={focused_hwnd} | refocus={needs_refocus} | point={target_point}"
             )
             send_ctrl_v()
-            time.sleep(0.05)
+            time.sleep(0.02)
             keep_transcript_on_clipboard(text, "after-paste")
             log(f"chunk pasted; transcript kept on clipboard: {text[:60]}")
         except Exception as exc:

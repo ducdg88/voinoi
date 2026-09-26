@@ -21,3 +21,7 @@ mic-position.json
 .env
 .DS_Store
 Thumbs.db
+reader-data/
+.venv-*/
+*.bak-*
+voice-update.log

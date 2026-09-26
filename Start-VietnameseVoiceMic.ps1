@@ -11,7 +11,7 @@ if (-not (Test-Path $Python)) {
 }
 
 # Close the old browser-based mic app if it is still around.
-Get-CimInstance Win32_Process |
+$oldMicProcesses = Get-CimInstance Win32_Process |
   Where-Object {
     $_.Name -match '^(python|chrome|msedge)\.exe$' -and (
       $_.CommandLine -like '*voice_drop_server*' -or
@@ -19,11 +19,12 @@ Get-CimInstance Win32_Process |
       $_.CommandLine -like '*VI Mic Drop*' -or
       $_.CommandLine -like '*VietnameseVoiceMic*chrome-profile*'
     )
-  } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  }
+$oldMicProcesses | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+$oldMicProcesses | ForEach-Object { Wait-Process -Id $_.ProcessId -Timeout 5 -ErrorAction SilentlyContinue }
 
 # Keep only one native mic icon instance.
-Get-CimInstance Win32_Process |
+$nativeMicProcesses = Get-CimInstance Win32_Process |
   Where-Object {
     (
       $_.Name -match '^pythonw?\.exe$' -and
@@ -31,13 +32,27 @@ Get-CimInstance Win32_Process |
     ) -or (
       $_.Name -eq 'VietnameseVoiceMic.exe'
     )
-  } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  }
+$nativeMicProcesses | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+$nativeMicProcesses | ForEach-Object { Wait-Process -Id $_.ProcessId -Timeout 5 -ErrorAction SilentlyContinue }
 
 $stdoutLog = Join-Path $Root "voice-mic-start.log"
 $stderrLog = Join-Path $Root "voice-mic-crash.log"
-Set-Content -Path $stdoutLog -Value "" -Encoding UTF8
-Set-Content -Path $stderrLog -Value "" -Encoding UTF8
+foreach ($logPath in @($stdoutLog, $stderrLog)) {
+  $cleared = $false
+  for ($attempt = 1; $attempt -le 10; $attempt++) {
+    try {
+      Set-Content -Path $logPath -Value "" -Encoding UTF8
+      $cleared = $true
+      break
+    } catch [System.IO.IOException] {
+      Start-Sleep -Milliseconds 250
+    }
+  }
+  if (-not $cleared) {
+    throw "Could not prepare log file after waiting: $logPath"
+  }
+}
 $env:PYTHONWARNINGS = "ignore"
 $pythonArgs = @(
   "-X", "utf8",

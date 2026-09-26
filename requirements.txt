@@ -4,4 +4,7 @@ pywinauto>=0.6.8
 pyinstaller>=6.0
 setuptools<80
 webrtcvad-wheels>=2.0.14
-webrtcvad>=2.0.10
+webrtcvad>=2.0.10; python_version < "3.13"
+audioop-lts; python_version >= "3.13"
+edge-tts>=7.0
+pypdf>=5.0
