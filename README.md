@@ -2,6 +2,9 @@
 
 # VoiNoi (Voi Nói)
 
+
+**Nói tiếng Việt vào bất kỳ ô nào trên Windows → chữ xuất hiện đúng chỗ, không cần gõ tay.**
+
 Ứng dụng Windows chạy nền: nói tiếng Việt thành chữ, dán đúng vào ô anh đang chọn. Kèm Trợ lý đọc (đọc to tài liệu)
 và chế độ trò chuyện bằng giọng nói với trợ lý AI.
 
