@@ -458,13 +458,13 @@ def fix_whisper_idle(finding: dict, dry: bool) -> dict:
             "predicted": {"metric": "cold_load_rate", "value": round(finding["value"] * cur / nxt, 3)}}
 
 
-def fingerprint(finding: dict) -> str:
-    raw = f"{finding['id']}|{finding['root_cause']}"
+def fingerprint(finding: dict, level: int = 0) -> str:
+    raw = f"{finding['id']}|{finding['root_cause']}" + (f"|{level}" if level else "")
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
 def write_ticket(finding: dict, level: int, report_path: Path, dry: bool) -> str:
-    fp = fingerprint(finding)
+    fp = fingerprint(finding, level)
     for d in (INBOX_DIR, INBOX_DIR.parent / "Doing", INBOX_DIR.parent / "In-Progress"):
         if d.exists() and any(fp in p.name for p in d.glob("*.md")):
             return f"skip-dup: {finding['id']} -> {fp}"
@@ -565,8 +565,11 @@ def act(findings: list[dict], m: dict, state: dict, report_path: Path, dry: bool
         elif improved(hist, f["goal"]) and len(hist) >= 2:
             rec["level"] = 0
         msg = write_ticket(f, rec["level"], report_path, dry)
-        if msg.startswith("ticket"):
+        # Dem so NGAY phieu o nac nay ton tai ma metric chua dat (ca phieu moi lan phieu con mo)
+        if rec.get("last_ticket_day") != today:
             rec["tickets"] += 1
+            rec["last_ticket_day"] = today
+        if msg.startswith("ticket"):
             ticket_sent = True
         actions.append(msg)
 
