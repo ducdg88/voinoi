@@ -160,3 +160,8 @@ Bản `.exe` không đóng gói Whisper để gọn nhẹ. Repo `ducdg88/voinoi`
 - `build.ps1`, `updater.ps1`: đóng gói và tự cập nhật.
 - `install-shortcut.ps1`, `install-startup.ps1`, `uninstall-startup.ps1`: shortcut và tự chạy cùng Windows.
 - `assets/`: icon VoiNoi và script vẽ icon (`make_icon.py`).
+
+
+---
+
+Made by [DUCPT](https://ducpt.com/?utm_source=github&utm_medium=readme&utm_campaign=voinoi) — AI agents, automation and digital products for one-person businesses. This tool: https://ducpt.com/bai-viet/vietnamese-voice-mic-coding-bang-giong-noi/?utm_source=github&utm_medium=readme&utm_campaign=voinoi
