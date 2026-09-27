@@ -580,6 +580,19 @@ def doc_reader_command(*args: str) -> list[str]:
     return [str(pythonw if pythonw.exists() else sys.executable), "-X", "utf8", str(APP_DIR / "doc_reader.py"), *args]
 
 
+PASTE_CLIPBOARD_SETTLE_SECONDS = 1.5
+
+
+def restore_clipboard_later(text: str) -> None:
+    """Sau khi dan, chi dat lai transcript neu co ai khac ghi de clipboard, va doi app dich doc xong."""
+    def worker() -> None:
+        time.sleep(PASTE_CLIPBOARD_SETTLE_SECONDS)
+        if clipboard_sequence() != LAST_OWN_CLIPBOARD_SEQ[0]:
+            keep_transcript_on_clipboard(text, "after-paste")
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def reader_import_clipboard() -> dict:
     """Dua noi dung clipboard (chu, link hoac duong dan file) vao Tro ly doc; tu bat may chu neu chua chay."""
     try:
@@ -981,6 +994,7 @@ def paste_to_focused_field(
         return
     try:
         set_clipboard_text(text)
+        LAST_OWN_CLIPBOARD_SEQ[0] = clipboard_sequence()
         time.sleep(0.08)
         log(f"clipboard set: {get_clipboard_text()[:80]}")
         root.withdraw()
@@ -990,8 +1004,7 @@ def paste_to_focused_field(
         send_ctrl_v()
         log(f"paste sent | hwnd={target_hwnd} | focused={focused_hwnd} | point={target_point}")
     finally:
-        time.sleep(0.12)
-        keep_transcript_on_clipboard(text, "after-paste")
+        restore_clipboard_later(text)
         if restore_root:
             root.deiconify()
             root.lift()
@@ -4475,6 +4488,7 @@ class MicIconApp:
             if not set_clipboard_text_retry(text):
                 log(f"chunk paste skipped: clipboard busy; text={text[:120]}")
                 return
+            LAST_OWN_CLIPBOARD_SEQ[0] = clipboard_sequence()
             time.sleep(0.02)
             current_hwnd = foreground_window()
             needs_refocus = click_to_focus or (target_hwnd and current_hwnd != target_hwnd)
@@ -4487,8 +4501,9 @@ class MicIconApp:
                 f"focused={focused_hwnd} | refocus={needs_refocus} | point={target_point}"
             )
             send_ctrl_v()
-            time.sleep(0.02)
-            keep_transcript_on_clipboard(text, "after-paste")
+            # Khong ghi lai clipboard ngay sau Ctrl+V: app doc clipboard bat dong bo
+            # (To Ong doc qua IPC) se doc trung luc clipboard dang trong va dan ra rong.
+            restore_clipboard_later(text)
             log(f"chunk pasted; transcript kept on clipboard: {text[:60]}")
         except Exception as exc:
             keep_transcript_on_clipboard(text, "paste-error")
