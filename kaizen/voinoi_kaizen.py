@@ -331,14 +331,14 @@ def diagnose(m: dict) -> list[dict]:
 
     if m["latency_p50_ms"] > TARGET_LATENCY_P50_MS:
         api_share = m["api_p50_ms"] / max(1, m["latency_p50_ms"])
-        cause = ("Cho Google nhan dang chiem phan lon do tre (goi API tuan tu, audio dai chia chunk)"
+        cause = ("Thoi gian nhan dang (Google + Whisper tren CPU) chiem phan lon do tre"
                  if api_share >= 0.5 else
                  "Thoi gian tu luc dung noi den luc bat dau nhan dang qua lau (capture_wait)")
         f.append({"id": "LATENCY_HIGH", "actor": "codex", "metric": "latency_p50_ms", "goal": "down",
                   "value": m["latency_p50_ms"], "target": TARGET_LATENCY_P50_MS,
                   "impact": round(n * min(1.0, m["latency_p50_ms"] / TARGET_LATENCY_P50_MS - 1)),
                   "root_cause": cause,
-                  "evidence": f"p50={m['latency_p50_ms']} ms, p90={m['latency_p90_ms']} ms, api p50={m['api_p50_ms']} ms, capture_wait p50={m['capture_wait_p50_ms']} ms"})
+                  "evidence": f"p50={m['latency_p50_ms']} ms, p90={m['latency_p90_ms']} ms, nhan dang p50={m['api_p50_ms']} ms, capture_wait p50={m['capture_wait_p50_ms']} ms"})
 
     if m["paste_fail_rate"] > TARGET_PASTE_FAIL_RATE:
         f.append({"id": "PASTE_FAIL", "actor": "codex", "metric": "paste_fail_rate", "goal": "down",
@@ -459,15 +459,31 @@ def fix_whisper_idle(finding: dict, dry: bool) -> dict:
 
 
 def fingerprint(finding: dict, level: int = 0) -> str:
-    raw = f"{finding['id']}|{finding['root_cause']}" + (f"|{level}" if level else "")
+    raw = f"{finding['id']}|L{level}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
+OPEN_BOARDS = ("Inbox", "Backlog", "This-Week", "Today", "Waiting-Review", "Doing", "In-Progress")
+
+
+def open_ticket(finding: dict, level: int) -> Path | None:
+    """Phieu cung loi, cung nac con mo o bat ky cot nao (khong phu thuoc cau chu nguyen nhan)."""
+    for board in OPEN_BOARDS:
+        for p in (INBOX_DIR.parent / board).glob(f"*-kaizen-voinoi-{finding['id'].lower()}-*.md"):
+            try:
+                m = re.search(r"Kaizen-Level: (\d+)", p.read_text(encoding="utf-8"))
+            except OSError:
+                continue
+            if (int(m.group(1)) if m else 0) == level:
+                return p
+    return None
 
 
 def write_ticket(finding: dict, level: int, report_path: Path, dry: bool) -> str:
     fp = fingerprint(finding, level)
-    for d in (INBOX_DIR, INBOX_DIR.parent / "Doing", INBOX_DIR.parent / "In-Progress"):
-        if d.exists() and any(fp in p.name for p in d.glob("*.md")):
-            return f"skip-dup: {finding['id']} -> {fp}"
+    existing = open_ticket(finding, level)
+    if existing:
+        return f"skip-dup: {finding['id']} nac {level} -> {existing.parent.name}/{existing.name}"
     prio = "P0" if level > 0 else "P1"
     model = MODEL_BY_LEVEL.get(level, "opus")
     extra = ("\nLEO NAC " + str(level) + ": cach sua truoc KHONG lam metric tot len. Doi cach lam, dao root cause MOI, "
@@ -487,6 +503,7 @@ Muc-tieu-dich: {finding['metric']} {'<=' if finding['goal'] == 'down' else '>='}
 Tai-chinh-cap: XANH
 Do-luong: {finding['metric']} (hien {finding['value']}) do bang kaizen/voinoi_kaizen.py
 Kaizen-Fingerprint: {fp}
+Kaizen-Level: {level}
 {extra}
 Bang chung: {finding['evidence']}
 """
@@ -589,12 +606,13 @@ def verify(m: dict, state: dict) -> list[dict]:
     remaining = []
     today = now().strftime("%Y-%m-%d")
     for p in state.get("predictions", []):
-        if p["date"] == today:
+        if p["date"] == today or p.get("due", "") > today:
             remaining.append(p)
             continue
         actual = m.get(p["metric"])
         out.append({"metric": p["metric"], "predicted": p["value"], "actual": actual,
-                    "from": p["date"], "error": None if actual is None else round(actual - p["value"], 3)})
+                    "from": p["date"], "error": None if actual is None else round(actual - p["value"], 3),
+                    "note": p.get("note", "")})
     state["predictions"] = remaining
     state.setdefault("verified", []).extend(out)
     del state["verified"][:-50]
@@ -610,7 +628,7 @@ def metric_rows(m: dict) -> list[tuple[str, str, str, bool]]:
         ("Độ trễ nói xong tới lúc có chữ (p50)", f"{m['latency_p50_ms'] / 1000:.1f} giây", f"≤ {TARGET_LATENCY_P50_MS / 1000:.0f} giây",
          ok(m["latency_p50_ms"], TARGET_LATENCY_P50_MS, "down")),
         ("Độ trễ p90", f"{m['latency_p90_ms'] / 1000:.1f} giây", "theo dõi", True),
-        ("Chờ Google nhận dạng (p50)", f"{m['api_p50_ms'] / 1000:.1f} giây", "theo dõi", True),
+        ("Thời gian nhận dạng, Google + Whisper (p50)", f"{m['api_p50_ms'] / 1000:.1f} giây", "theo dõi", True),
         ("Phiên trúng lúc nạp Whisper", f"{m['cold_load_sessions']} ({pct(m['cold_load_rate'])})", f"≤ {pct(TARGET_COLD_LOAD_RATE)}",
          ok(m["cold_load_rate"], TARGET_COLD_LOAD_RATE, "down")),
         ("Phiên độ tin cậy thấp", f"{m['low_conf_sessions']} ({pct(m['low_conf_rate'])})", f"≤ {pct(TARGET_LOW_CONF_RATE)}",
@@ -711,7 +729,8 @@ ol.loop li::before{{content:counter(s) ". ";font-weight:700;color:var(--accent)}
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--days", type=int, default=7)
+    # 3 ngay (~30 phien): du so de tin, du nhanh de thang leo 3 ngay thay duoc tac dung cua ban sua
+    ap.add_argument("--days", type=int, default=3)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--open", action="store_true")
     args = ap.parse_args()

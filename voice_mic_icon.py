@@ -3286,10 +3286,14 @@ class MicIconApp:
                     f"loading faster-whisper {self.whisper_model_name} model "
                     f"cpu/{self.whisper_compute_type}..."
                 )
+                # num_workers mac dinh = 1 lam cac khuc "song song" phai xep hang. Do 27/09/2026 (3 khuc 9 giay,
+                # small int8, 12 luong CPU): 13,7 giay -> 9,1 giay, dinh RAM them ~126 MB, chu ra giong het.
                 self.whisper_model = _faster_whisper(
                     self.whisper_model_name,
                     device="cpu",
                     compute_type=self.whisper_compute_type,
+                    num_workers=max(1, int(self.settings_value("whisper_num_workers", 3) or 1)),
+                    cpu_threads=max(0, int(self.settings_value("whisper_cpu_threads", 4) or 0)),
                 )
                 self.whisper_backend = "faster"
                 log(f"faster-whisper {self.whisper_model_name} model loaded")
@@ -3498,6 +3502,8 @@ class MicIconApp:
 
         recovered = 0
         quiet = 0
+        self.last_chunk_lost = [index for index, _text, status in results if status not in ("ok", "whisper", "quiet")]
+        self.last_chunk_total = total
         for index, chunk_text, status in sorted(results, key=lambda item: item[0]):
             if status == "ok":
                 parts.append(chunk_text)
@@ -3530,6 +3536,8 @@ class MicIconApp:
 
     def _transcribe_google_candidate(self, audio: sr.AudioData, duration: float) -> tuple[str, float | None]:
         self.google_confidence_scores.clear()
+        self.last_chunk_lost: list[int] | None = None
+        self.last_chunk_total = 0
         if duration > GOOGLE_SINGLE_PASS_MAX_SECONDS:
             log(f"long audio detected; using google chunks | duration={duration:.1f}s")
             google_text = self._transcribe_google_chunked(audio)
@@ -3628,16 +3636,30 @@ class MicIconApp:
             if google_text:
                 google_candidate = google_text
                 google_avg_confidence = avg_confidence
+                suspicion = transcript_suspicion_penalty(google_text)
                 should_try_whisper = (
                     self.whisper_model is not None
                     and (
-                        transcript_suspicion_penalty(google_text) > 0
+                        suspicion > 0
                         or (
                             avg_confidence is not None
                             and avg_confidence < GOOGLE_LOW_CONFIDENCE_FALLBACK_THRESHOLD
                         )
                     )
                 )
+                if (
+                    should_try_whisper
+                    and suspicion == 0
+                    and self.last_chunk_total > 1
+                    and self.last_chunk_lost == [self.last_chunk_total]
+                ):
+                    # Chi mat khuc cuoi (thuong la tieng tho/on sau khi noi xong, ~5 giay). Log 7 ngay (27/09/2026):
+                    # 16 lan Whisper nghe lai CA doan trong ca nay, thang 0 lan, moi lan ton them ~14 giay.
+                    log(
+                        f"whisper verification skipped: only tail chunk lost | duration={duration:.1f}s | "
+                        f"google_confidence={format_confidence_percent(avg_confidence)}"
+                    )
+                    return google_text
                 if should_try_whisper:
                     log(
                         f"whisper verification requested | duration={duration:.1f}s | "
