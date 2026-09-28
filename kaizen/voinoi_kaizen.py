@@ -13,12 +13,14 @@ Chay:  .venv\\Scripts\\python.exe kaizen\\voinoi_kaizen.py [--days 7] [--dry-run
 from __future__ import annotations
 
 import argparse
+import bisect
 import ctypes
 import datetime as dt
 import difflib
 import hashlib
 import html
 import json
+import os
 import re
 import shutil
 import statistics
@@ -224,15 +226,33 @@ def load_transcripts(since: dt.datetime) -> list[dict]:
     return out
 
 
+def message_text(content) -> str:
+    """Chu nguoi dung go trong mot tin nhan. Tin co anh hoac noi dung dan luu dang danh sach;
+    lay cac phan "text", bo phan the he thong (bat dau bang "<")."""
+    if isinstance(content, str):
+        return "" if content.startswith("<") else content
+    if not isinstance(content, list):
+        return ""
+    parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+    return "\n".join(p for p in parts if p and not p.lstrip().startswith("<"))
+
+
 def load_toong_messages(since: dt.datetime) -> list[tuple[dt.datetime, str]]:
     """Tin nhan nguoi dung that su gui trong To Ong (moi account, moi du an)."""
     msgs = []
     cutoff = since.timestamp()
     utc_offset = dt.datetime.now().astimezone().utcoffset() or dt.timedelta(0)
+    # Thu muc projects cua moi account thuong la junction tro ve cung ~/.claude/projects:
+    # doc moi file that mot lan, neu khong tin nhan bi dem lap theo so account.
+    seen: set[str] = set()
     for f in TOONG_ACCOUNTS.glob("*/projects/*/*.jsonl"):
         try:
             if f.stat().st_mtime < cutoff:
                 continue
+            real = os.path.normcase(os.path.realpath(f))
+            if real in seen:
+                continue
+            seen.add(real)
             with f.open(encoding="utf-8", errors="replace") as fh:
                 for line in fh:
                     if '"type":"user"' not in line.replace(" ", ""):
@@ -241,8 +261,8 @@ def load_toong_messages(since: dt.datetime) -> list[tuple[dt.datetime, str]]:
                         d = json.loads(line)
                     except Exception:
                         continue
-                    content = d.get("message", {}).get("content")
-                    if not isinstance(content, str) or content.startswith("<"):
+                    content = message_text(d.get("message", {}).get("content"))
+                    if not content:
                         continue
                     t = dt.datetime.fromisoformat(d["timestamp"].replace("Z", "")) + utc_offset
                     if t >= since:
@@ -256,18 +276,20 @@ def load_toong_messages(since: dt.datetime) -> list[tuple[dt.datetime, str]]:
 def match_deliveries(transcripts: list[dict], messages: list[tuple[dt.datetime, str]]) -> list[dict]:
     """Chu da noi co toi tin nhan that khong, va Founder da sua tay bao nhieu."""
     results = []
+    times = [t for t, _ in messages]  # messages da sap theo thoi gian
     for tr in transcripts:
         spoken = norm(tr["text"])
         if len(spoken) < 12:
             continue
         best, best_msg = 0.0, ""
-        for t, content in messages:
-            if t < tr["at"] or t > tr["at"] + dt.timedelta(minutes=30):
-                continue
-            sent = norm(content)
-            sm = difflib.SequenceMatcher(None, spoken, sent, autojunk=False)
+        spoken_words = spoken.split()
+        lo = bisect.bisect_left(times, tr["at"])
+        hi = bisect.bisect_right(times, tr["at"] + dt.timedelta(minutes=30))
+        for t, content in messages[lo:hi]:
+            # so theo tu, khong theo ky tu: tin nhan dan dai (hang chuc nghin ky tu) so theo ky tu rat cham
+            sm = difflib.SequenceMatcher(None, spoken_words, norm(content).split(), autojunk=False)
             # do phu: phan chu da noi con lai trong tin nhan gui di
-            cover = sum(b.size for b in sm.get_matching_blocks()) / max(1, len(spoken))
+            cover = sum(b.size for b in sm.get_matching_blocks()) / max(1, len(spoken_words))
             if cover > best:
                 best, best_msg = cover, content
         results.append({"at": tr["at"], "hwnd": tr.get("hwnd"), "spoken": tr["text"],
@@ -281,8 +303,10 @@ def measure(days: int) -> dict:
     transcripts = load_transcripts(since)
     messages = load_toong_messages(since)
 
-    toong_hwnds = {h for h in {s["hwnd"] for s in sessions} if hwnd_exe(h).lower() == "toong.exe"}
-    deliveries = match_deliveries([t for t in transcripts if t.get("hwnd") in toong_hwnds], messages)
+    # Cua so da dong (To Ong khoi dong lai) thi Windows khong con biet no la cua ai; chi loai
+    # lan noi vao cua so con song cua chuong trinh khac, con lai de phan so noi dung quyet dinh.
+    other_hwnds = {h for h in {t.get("hwnd") for t in transcripts} if hwnd_exe(h).lower() not in ("", "toong.exe")}
+    deliveries = match_deliveries([t for t in transcripts if t.get("hwnd") not in other_hwnds], messages)
 
     n = len(sessions)
     lat = [s["latency_ms"] for s in sessions if "latency_ms" in s]
