@@ -1,4 +1,4 @@
-SpeechRecognition>=3.16.1
+SpeechRecognition>=3.17.0
 PyAudio>=0.2.14
 pywinauto>=0.6.8
 pyinstaller>=6.0
