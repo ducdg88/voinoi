@@ -7,4 +7,4 @@ webrtcvad-wheels>=2.0.14
 webrtcvad>=2.0.10; python_version < "3.13"
 audioop-lts; python_version >= "3.13"
 edge-tts>=7.0
-pypdf>=5.0
+pypdf>=6.19.0
