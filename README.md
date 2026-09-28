@@ -144,9 +144,9 @@ releases\VoiNoi-windows.zip
 releases\version.json
 ```
 
-Bản `.exe` không đóng gói Whisper để gọn nhẹ. Repo `ducdg88/voinoi` đang để riêng tư nên tự cập nhật tắt sẵn
-(`auto_update_enabled: false`): app không tải được file từ Release riêng tư. Nếu sau này mở công khai repo, bật lại
-`auto_update_enabled` và mỗi bản mới tải cả `VoiNoi-windows.zip` lẫn `version.json` lên GitHub Release.
+Bản `.exe` không đóng gói Whisper để gọn nhẹ. Repo `ducdg88/voinoi` hiện công khai, nhưng tự cập nhật vẫn tắt sẵn
+(`auto_update_enabled: false`) từ thời repo còn riêng tư. Muốn bật lại, đổi `auto_update_enabled`
+và tải cả `VoiNoi-windows.zip` lẫn `version.json` lên GitHub Release ở mỗi bản mới.
 
 ## Xử lý lỗi thường gặp
 
