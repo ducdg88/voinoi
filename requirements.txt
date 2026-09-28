@@ -2,7 +2,7 @@ SpeechRecognition>=3.16.1
 PyAudio>=0.2.14
 pywinauto>=0.6.8
 pyinstaller>=6.0
-setuptools<80
+setuptools<85
 webrtcvad-wheels>=2.0.14
 webrtcvad>=2.0.10; python_version < "3.13"
 audioop-lts; python_version >= "3.13"
