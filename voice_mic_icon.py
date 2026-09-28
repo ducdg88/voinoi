@@ -60,7 +60,7 @@ LAST_TRANSCRIPT_FILE = APP_DIR / "voice-last.txt"
 TRANSCRIPT_HISTORY_FILE = APP_DIR / "voice-transcripts.jsonl"
 LAST_AUDIO_FILE = APP_DIR / "voice-last.wav"
 APP_TITLE = "VoiNoi"
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 APP_BUILD = "voinoi-2026-09-28"
 SIZE = 38
 CORE = 26
@@ -972,9 +972,10 @@ def read_update_manifest(manifest_url: str) -> dict[str, object]:
         return {}
     if re.match(r"^https?://", manifest_url, flags=re.IGNORECASE):
         with urllib.request.urlopen(manifest_url, timeout=12) as response:
-            return json.loads(response.read().decode("utf-8"))
+            # utf-8-sig: build.ps1 cu ghi version.json co BOM, doc "utf-8" thi JSONDecodeError (tu cap nhat chua tung chay)
+            return json.loads(response.read().decode("utf-8-sig"))
     path = Path(manifest_url.replace("file:///", "")).expanduser()
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def resolve_update_url(manifest_url: str, zip_url: str) -> str:
@@ -2592,7 +2593,13 @@ class MicIconApp:
         self.root.after(1200, self.keep_topmost)
 
     def check_for_updates_on_start(self) -> None:
-        if not bool(self.settings.get("auto_update_enabled", False)):
+        # Mac dinh BAT tu 2.0.2 (repo da cong khai). Chi file .local.json cua tung may moi tat duoc:
+        # voice-mic-settings.json cu tren may nguoi dung con ghi false (tu hoi repo rieng tu) va updater
+        # giu nguyen file do, neu doc no thi se khong bao gio tu cap nhat lai.
+        local = read_json_cached(LOCAL_SETTINGS_FILE) if LOCAL_SETTINGS_FILE.exists() else {}
+        enabled = local.get("auto_update_enabled", True) if isinstance(local, dict) else True
+        if not bool(enabled):
+            log("auto update off: auto_update_enabled=false in voice-mic-settings.local.json")
             return
         if not getattr(sys, "frozen", False):
             log("auto update skipped: source mode")

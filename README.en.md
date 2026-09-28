@@ -12,6 +12,13 @@ and a voice chat mode with an AI assistant.
 
 Former name: Vietnamese Voice Mic. Renamed to VoiNoi from version 2.0.0.
 
+## What's new in 2.0.2 (auto-update)
+
+- The `.exe` now updates itself when the app starts. This used to be off by default and had never actually worked:
+  `version.json` had a BOM so the app failed to parse it, a running Reading Assistant locked files so the copy failed,
+  and the app was not restarted after a failure. All three are fixed. Machines on 2.0.1 or older need to download this
+  version manually once.
+
 ## What's new in 2.0.1 (complete reading, whole-page reading)
 
 - **Read a whole web page:** with nothing highlighted, `Alt + click` on the page and choose "Read". The app takes the tab's link
@@ -162,9 +169,10 @@ releases\VoiNoi-windows.zip
 releases\version.json
 ```
 
-The `.exe` does not bundle Whisper to stay small. The `ducdg88/voinoi` repo used to be private, so auto-update is off by default
-(`auto_update_enabled: false`): the app cannot download files from a private Release. Now that the repo is public, you can turn
-`auto_update_enabled` back on and upload both `VoiNoi-windows.zip` and `version.json` to each GitHub Release.
+The `.exe` does not bundle Whisper to stay small. From 2.0.2 the `.exe` updates itself: on each start it reads `version.json`
+from the latest Release, and when a newer version exists it downloads the zip, checks SHA-256, stops any running Reading
+Assistant, copies the files over and restarts. Every release must upload both `VoiNoi-windows.zip` and `version.json`.
+Turn it off on one machine: `"auto_update_enabled": false` in `voice-mic-settings.local.json`.
 
 ## Troubleshooting
 

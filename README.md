@@ -12,6 +12,12 @@ và chế độ trò chuyện bằng giọng nói với trợ lý AI.
 
 Tên cũ: Vietnamese Voice Mic. Từ bản 2.0.0 đổi tên thành VoiNoi.
 
+## Có gì mới ở 2.0.2 (tự cập nhật)
+
+- Bản `.exe` tự cập nhật lên bản mới khi mở app. Trước đây tính năng này tắt sẵn và cũng chưa từng chạy được: file
+  `version.json` có BOM nên app đọc lỗi, Trợ lý đọc đang chạy khoá file làm chép đè thất bại, và app không mở lại khi lỗi.
+  Cả ba đã sửa. Máy đang dùng 2.0.1 trở về trước cần tải bản này bằng tay một lần.
+
 ## Có gì mới ở 2.0.1 (đọc đủ, đọc cả trang)
 
 - **Đọc cả trang web:** không bôi đen gì, `Alt + click` trên trang rồi chọn "Đọc". App lấy link của tab từ ô địa chỉ
@@ -161,9 +167,10 @@ releases\VoiNoi-windows.zip
 releases\version.json
 ```
 
-Bản `.exe` không đóng gói Whisper để gọn nhẹ. Repo `ducdg88/voinoi` hiện công khai, nhưng tự cập nhật vẫn tắt sẵn
-(`auto_update_enabled: false`) từ thời repo còn riêng tư. Muốn bật lại, đổi `auto_update_enabled`
-và tải cả `VoiNoi-windows.zip` lẫn `version.json` lên GitHub Release ở mỗi bản mới.
+Bản `.exe` không đóng gói Whisper để gọn nhẹ. Từ 2.0.2 bản `.exe` tự cập nhật: mỗi lần mở, app đọc `version.json`
+của Release mới nhất, thấy bản mới hơn thì tải zip, kiểm SHA-256, tắt cả Trợ lý đọc đang chạy rồi chép đè và mở lại.
+Mỗi bản mới phải tải cả `VoiNoi-windows.zip` lẫn `version.json` lên GitHub Release. Tắt trên một máy:
+`"auto_update_enabled": false` trong `voice-mic-settings.local.json`.
 
 ## Xử lý lỗi thường gặp
 

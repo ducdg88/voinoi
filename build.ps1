@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Venv = Join-Path $Root ".venv"
-$Version = "2.0.1"
+$Version = "2.0.2"
 $AppName = "VoiNoi"
 $ReleaseBaseUrl = "https://github.com/ducdg88/voinoi/releases/latest/download"
 
@@ -68,7 +68,8 @@ $Manifest = [ordered]@{
   notes = "$AppName $Version"
   release_url = "$ReleaseBaseUrl/$ZipName"
 }
-$Manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path (Join-Path $ReleaseDir "version.json")
+# Khong dung Set-Content -Encoding UTF8: PowerShell 5 them BOM, ban app cu doc manifest bi loi JSON
+[IO.File]::WriteAllText((Join-Path $ReleaseDir "version.json"), ($Manifest | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding $false))
 
 Write-Host ""
 Write-Host "Build complete:" $Out
