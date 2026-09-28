@@ -760,8 +760,11 @@ def main() -> int:
         with (REPORT_DIR / "cron.log").open("a", encoding="utf-8") as fh:
             fh.write(f"{now():%Y-%m-%d %H:%M:%S} sessions={m['sessions']} p50={m['latency_p50_ms']} "
                      f"findings={[f['id'] for f in findings]} actions={len(actions)}\n")
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(md)
+    # Task Scheduler chay bang pythonw.exe: khong co console, sys.stdout la None.
+    # Truoc day dong nay lam moi lan chay bao that bai (ma 1) du viec da xong.
+    if sys.stdout is not None:
+        sys.stdout.reconfigure(encoding="utf-8")
+        print(md)
     if args.open and not args.dry_run:
         subprocess.Popen(["cmd", "/c", "start", "", str(REPORT_DIR / "dashboard.html")], creationflags=0x08000000)
     return 0

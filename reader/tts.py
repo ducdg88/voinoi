@@ -63,7 +63,7 @@ _loop: asyncio.AbstractEventLoop | None = None
 _loop_lock = threading.Lock()
 _inflight: dict[str, concurrent.futures.Future] = {}
 _inflight_lock = threading.Lock()
-_prefetch_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="tts-prefetch")
+_prefetch_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="tts-prefetch")
 
 
 class TTSError(Exception):
@@ -160,11 +160,22 @@ async def _synthesize_async(text: str, voice: str, rate: str = "+0%") -> tuple[b
     return b"".join(chunks), marks
 
 
+def _nudged_rate(rate: str, delta: int) -> str:
+    """Toc do lech 1-2%: tai khong nghe ra, nhung dich vu coi la yeu cau moi."""
+    match = re.fullmatch(r"([+-]\d{1,3})%", rate or "")
+    value = int(match.group(1)) if match else 0
+    value += delta
+    return f"{value:+d}%"
+
+
 def _synthesize_uncached(text: str, voice: str, path: Path, rate: str = "+0%") -> bytes:
+    # Dich vu Edge chap chon: cung mot cau luc tra tieng luc tra rong (NoAudioReceived), co cau hong
+    # lien 3 lan neu gui y het. Lan thu sau doi toc do rat nhe nen thuong qua duoc (do ngay 28/09).
+    attempt_rates = [rate, _nudged_rate(rate, 1), _nudged_rate(rate, -1), _nudged_rate(rate, 2), rate]
     last_error: Exception | None = None
-    for attempt in range(3):
+    for attempt, attempt_rate in enumerate(attempt_rates):
         try:
-            future = asyncio.run_coroutine_threadsafe(_synthesize_async(text, voice, rate), _event_loop())
+            future = asyncio.run_coroutine_threadsafe(_synthesize_async(text, voice, attempt_rate), _event_loop())
             data, marks = future.result(timeout=60)
             if data:
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -176,7 +187,8 @@ def _synthesize_uncached(text: str, voice: str, path: Path, rate: str = "+0%") -
             last_error = TTSError("dịch vụ giọng đọc trả về rỗng")
         except Exception as exc:  # mang cham, dich vu tam loi
             last_error = exc
-        time.sleep(0.6 * (attempt + 1))
+        if attempt < len(attempt_rates) - 1:
+            time.sleep(0.5 * (attempt + 1))
     raise TTSError(f"Không tạo được giọng đọc: {type(last_error).__name__}: {last_error}")
 
 
@@ -306,10 +318,24 @@ def warm_up() -> None:
     _quiet_synthesize("Xin chào.", "vi-VN-NamMinhNeural", False)
 
 
+_queued_segments: set[tuple] = set()
+_queued_lock = threading.Lock()
+
+
 def prefetch_segment(sentences: list[str], voice: str, rate: str = "+0%") -> None:
+    # moi doan duoc xin tao truoc nhieu lan (moi lan nghe xong mot doan), chi xep hang mot lan
+    key = (tuple(sentences), voice, rate)
+    with _queued_lock:
+        if key in _queued_segments:
+            return
+        _queued_segments.add(key)
+
     def job() -> None:
         try:
             synthesize_segment(sentences, voice, rate)
         except Exception:
             pass
+        finally:
+            with _queued_lock:
+                _queued_segments.discard(key)
     _prefetch_pool.submit(job)

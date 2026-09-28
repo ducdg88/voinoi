@@ -12,6 +12,22 @@ and a voice chat mode with an AI assistant.
 
 Former name: Vietnamese Voice Mic. Renamed to VoiNoi from version 2.0.0.
 
+## What's new in 2.0.1 (complete reading, whole-page reading)
+
+- **Read a whole web page:** with nothing highlighted, `Alt + click` on the page and choose "Read". The app takes the tab's link
+  from the address bar (no key presses, the page stays untouched), downloads the main article and reads it without menus,
+  table of contents or footer. Pages behind a login fall back to the text shown on screen, minus short menu lines.
+- **Highlight is kept:** the `Alt + click` used to fall through to the page and clear the highlight, so "Read" read stale
+  clipboard content. Now `Alt + click` no longer reaches the page, and "Read" only uses text copied in the last 10 minutes.
+  Disable with `"block_alt_click_passthrough": false`.
+- **No skipped passages:** the Edge voice service sometimes returns nothing (`NoAudioReceived`), which used to drop a whole
+  passage of about 9 sentences silently. Now it retries with a 1 to 2% speed nudge (inaudible) and falls back to reading
+  sentence by sentence. Measured on a 107-passage article: 3 lost passages down to 0.
+- **Reading Assistant:** opens whole folders (reads every document inside in order), links with Vietnamese characters,
+  very long documents without stalls between passages, waits for the network and resumes at the same sentence,
+  and names the exact PDF pages that are images.
+- **Fixes:** Kaizen always reported failure under Task Scheduler; Whisper counted noise-only segments as lost words.
+
 ## What's new in 2.0.0 (faster, no more freezes)
 
 Measured on a real machine, from the app's logs:
@@ -59,7 +75,8 @@ powershell -ExecutionPolicy Bypass -File .\install-shortcut.ps1
 ## Radial menu modes
 
 - Type: speech to text into the selected field.
-- Read: highlight or `Ctrl+C` the passage first, the assistant reads it aloud. If nothing is copied, the Reading Assistant window opens.
+- Read: highlight a passage to read just that. With nothing highlighted in a browser, it reads the whole article on the open page.
+  Outside a browser it reads what you `Ctrl+C`ed in the last 10 minutes. Otherwise the Reading Assistant window opens.
 - Talk: voice chat with the AI assistant.
 - Cancel: `Esc`, click outside, or leave it for 10 seconds.
 - Turn off the radial menu (`Alt + click` types immediately): `"enable_radial_menu": false` in `voice-mic-settings.local.json`.
@@ -79,7 +96,8 @@ powershell -ExecutionPolicy Bypass -File .\install-shortcut.ps1
 Reads documents, notes and research papers aloud in a natural Vietnamese voice (Hoài My, Nam Minh).
 
 - Open: run `Start Doc Reader.cmd`, or drag and drop a file onto it.
-- Input: txt, md, pdf with a text layer, docx, html, epub, web links, public Google Docs, whatever you just `Ctrl+C`ed.
+- Input: txt, md, pdf with a text layer, docx, html, epub, a whole folder, web links, public Google Docs, whatever you just `Ctrl+C`ed.
+- Hand it a job from the command line: `"Start Doc Reader.cmd" "E:\Books\abc.pdf"` opens and starts reading.
 - Shortcuts: `Space` read or pause, left and right arrows to move between sentences, `N` take a note, `Q` ask a question, `R` reread the sentence.
 - Notes are saved as Markdown in `reader-data/notes/`. Runs locally at `http://127.0.0.1:8767`.
 - Needs Internet to generate the voice (`edge-tts`), audio is cached in `reader-data/tts-cache/`.

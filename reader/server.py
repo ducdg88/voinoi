@@ -19,10 +19,32 @@ from . import extract, store, tts
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD_BYTES = 80_000_000
 PREFETCH_AHEAD = 4
+PREFETCH_AHEAD_CHARS = 1000  # khoang 1 phut nghe
+PREFETCH_MAX_SEGMENTS = 8
 SEGMENT_MAX_CHARS = 420  # doc lien toi da chung nay ky tu mot lan (ca doan ngan, hoac nua doan dai)
 
 
+_segment_cache: dict[tuple, list[list]] = {}
+_segment_lock = threading.Lock()
+
+
 def build_segments(doc: dict, voice: str, auto_english: bool) -> list[list[int]]:
+    """Nhu _build_segments nhung nho ket qua: tai lieu dai chia doan mat ~1.5 giay,
+    ma moi doan doc goi toi 2 lan, khong nho thi giua cac doan bi lang vai giay."""
+    key = (doc.get("id"), doc.get("content_hash"), len(doc["sentences"]), voice, auto_english)
+    with _segment_lock:
+        cached = _segment_cache.get(key)
+    if cached is not None:
+        return cached
+    segments = _build_segments(doc, voice, auto_english)
+    with _segment_lock:
+        if len(_segment_cache) >= 16:
+            _segment_cache.pop(next(iter(_segment_cache)))
+        _segment_cache[key] = segments
+    return segments
+
+
+def _build_segments(doc: dict, voice: str, auto_english: bool) -> list[list[int]]:
     """Chia tai lieu thanh cac doan doc lien: cung mot khoi van, cung ngon ngu, khong qua dai.
 
     Moi phan tu la [cau bat dau, cau ket thuc (khong tinh), giong dung de doc].
@@ -248,10 +270,15 @@ class Handler(BaseHTTPRequestHandler):
             stripped = value.strip().strip('"')
             if re.match(r"^https?://\S+$", stripped):
                 kind, value = "url", stripped
-            elif re.match(r"^[A-Za-z]:\\[^\n]+\.\w{2,5}$", stripped) and Path(stripped).is_file():
+            elif re.match(r"^([A-Za-z]:\\|\\\\)[^\n]+$", stripped) and Path(stripped).exists():
                 kind, value = "path", stripped
             else:
                 kind = "text"
+        elif kind == "text":
+            # dan duong dan file/thu muc vao o van ban: doc noi dung that thay vi doc duong dan
+            stripped = value.strip().strip('"')
+            if re.match(r"^([A-Za-z]:\\|\\\\)[^\n]+$", stripped) and Path(stripped).exists():
+                kind, value = "path", stripped
         if kind == "text":
             if not value.strip():
                 raise ApiError(400, "Chưa có nội dung.")
@@ -295,9 +322,21 @@ class Handler(BaseHTTPRequestHandler):
         voice, auto_english = self.voice_options(query)
         segments = build_segments(doc, voice, auto_english)
         position = doc.get("position", 0)
-        for a, b, seg_voice in segments:
-            if b > position:
-                tts.prefetch_segment([s["t"] for s in doc["sentences"][a:b]], seg_voice, self.rate_option(query))
+        first = next((k for k, (_a, b, _v) in enumerate(segments) if b > position), None)
+        if first is not None:
+            self.prefetch_segments(doc, segments, first, self.rate_option(query))
+
+    @staticmethod
+    def prefetch_segments(doc: dict, segments: list, start: int, rate: str) -> None:
+        """Tao san giong cho cac doan sap doc. Dich vu giong doc co luc mat 4-14 giay moi doan,
+        nen tinh theo luong chu (khoang 1 phut nghe) chu khong theo so doan: tieu de va doan ngan
+        chi doc vai giay, tao truoc 2 doan la khong kip."""
+        chars = 0
+        for a, b, seg_voice in segments[start:start + PREFETCH_MAX_SEGMENTS]:
+            texts = [s["t"] for s in doc["sentences"][a:b]]
+            tts.prefetch_segment(texts, seg_voice, rate)
+            chars += sum(len(t) for t in texts)
+            if chars >= PREFETCH_AHEAD_CHARS:
                 break
 
     def api_segment(self, doc_id: str, index: int, query: dict[str, list[str]], starts_only: bool) -> None:
@@ -309,9 +348,7 @@ class Handler(BaseHTTPRequestHandler):
         rate = self.rate_option(query)
         a, b, seg_voice = segments[index]
         path, starts = tts.synthesize_segment([s["t"] for s in doc["sentences"][a:b]], seg_voice, rate)
-        # doan ke tiep tao san trong luc doan nay dang doc
-        for na, nb, nvoice in segments[index + 1:index + 3]:
-            tts.prefetch_segment([s["t"] for s in doc["sentences"][na:nb]], nvoice, rate)
+        self.prefetch_segments(doc, segments, index + 1, rate)
         if starts_only:
             return self.send_json({"start": a, "end": b, "starts": starts})
         self.send_bytes(path.read_bytes(), "audio/mpeg", cache="private, max-age=86400")

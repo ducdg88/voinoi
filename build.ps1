@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Venv = Join-Path $Root ".venv"
-$Version = "2.0.0"
+$Version = "2.0.1"
 $AppName = "VoiNoi"
 $ReleaseBaseUrl = "https://github.com/ducdg88/voinoi/releases/latest/download"
 

@@ -98,6 +98,7 @@ const state = {
   selection: null,
 };
 let sentenceEls = [];
+let remainingChars = [];
 let lastUserScroll = 0;
 
 // ------------------------------------------------------------ thu vien
@@ -165,6 +166,11 @@ async function openDoc(id) {
 function showDoc(doc) {
   stopPlayback();
   state.doc = doc;
+  remainingChars = new Array(doc.sentences.length + 1);
+  remainingChars[doc.sentences.length] = 0;
+  for (let i = doc.sentences.length - 1; i >= 0; i--) {
+    remainingChars[i] = remainingChars[i + 1] + doc.sentences[i].t.length;
+  }
   state.idx = Math.min(doc.position || 0, doc.sentences.length - 1);
   closeComposer();
   $("#docTitle").textContent = doc.title;
@@ -195,6 +201,7 @@ function closeDoc() {
   stopPlayback();
   state.doc = null;
   sentenceEls = [];
+  remainingChars = [];
   $("#doc").innerHTML = "";
   $("#doc").append(emptyTemplate.cloneNode(true));
   $("#docTitle").textContent = "Chưa mở tài liệu";
@@ -327,8 +334,7 @@ function updateStatus() {
     return;
   }
   const total = doc.sentences.length;
-  let chars = 0;
-  for (let i = state.idx; i < total; i++) chars += doc.sentences[i].t.length;
+  const chars = remainingChars[state.idx] || 0;
   $(".dot-sep").hidden = false;
   $("#statusPos").textContent = `Câu ${state.idx + 1}/${total}`;
   $("#statusLeft").textContent = `còn khoảng ${minutesText(chars / (CHARS_PER_SECOND * state.speed))}`;
@@ -340,6 +346,16 @@ const audioPool = new Map();
 let current = null;
 let playToken = 0;
 let retried = new Set();
+const WAIT_MAX_TRIES = 60; // thu lai moi 5 giay, toi da 5 phut
+let waitTries = 0;
+let retryWait = null;
+
+function clearRetryWait() {
+  if (!retryWait) return;
+  clearTimeout(retryWait.timer);
+  window.removeEventListener("online", retryWait.resume);
+  retryWait = null;
+}
 
 function ttsUrl(i, bust = "") {
   // che do doc lien: cau le chi la tam thoi, khong can may chu tao truoc cac cau sau
@@ -530,7 +546,7 @@ async function playFromNatural(i, token) {
   const offset = starts[i - a] || 0;
   const begin = () => {
     try { audio.currentTime = offset; } catch { /* chua san sang */ }
-    audio.play().then(() => { setLoading(false); preloadSegments(k); }).catch((err) => {
+    audio.play().then(() => { setLoading(false); waitTries = 0; preloadSegments(k); }).catch((err) => {
       if (token !== playToken) return;
       if (err.name === "NotAllowedError") {
         state.playing = false;
@@ -547,6 +563,7 @@ async function playFrom(i) {
   i = nextSpeakable(i, 1);
   if (i < 0) { finish(); return; }
   if (current) current.pause();
+  clearRetryWait();
   if (window.speechSynthesis) speechSynthesis.cancel();
   const token = ++playToken;
   state.playing = true;
@@ -578,6 +595,7 @@ async function playFromSentence(i, token) {
     if (audio.currentTime) audio.currentTime = 0;
     await audio.play();
     retried.delete(i);
+    waitTries = 0;
   } catch (err) {
     if (token !== playToken) return;
     if (err.name === "NotAllowedError") {
@@ -615,6 +633,21 @@ async function handleAudioError(i, token, audio) {
     toast("Dịch vụ giọng đọc đang lỗi, tạm dùng giọng của trình duyệt.", true);
     return;
   }
+  // mat mang giua tai lieu dai: cho mang tro lai roi doc tiep dung cau nay, khong dung han
+  if (waitTries < WAIT_MAX_TRIES) {
+    if (waitTries === 0) toast(message + " Đang chờ mạng, có mạng lại là đọc tiếp.", true, 8000);
+    waitTries++;
+    retried.delete(i);
+    const resume = () => {
+      clearRetryWait();
+      if (token === playToken && state.playing) playFrom(i);
+    };
+    const timer = setTimeout(resume, 5000);
+    retryWait = { timer, resume };
+    window.addEventListener("online", resume);
+    return;
+  }
+  waitTries = 0;
   state.playing = false;
   updatePlayUI();
   toast(message + " Kiểm tra mạng rồi bấm đọc lại.", true, 6000);
@@ -672,9 +705,7 @@ function cancelSay() {
 
 function introText() {
   const doc = state.doc;
-  let chars = 0;
-  for (let i = state.idx; i < doc.sentences.length; i++) chars += doc.sentences[i].t.length;
-  const length = minutesText(chars / (CHARS_PER_SECOND * state.speed));
+  const length = minutesText((remainingChars[state.idx] || 0) / (CHARS_PER_SECOND * state.speed));
   if (state.justImported === doc.id) {
     // cau ngan, it bien doi nen thuong da co san trong cache, phat gan nhu ngay lap tuc
     return `Dạ, em nhận được tài liệu rồi, nghe khoảng ${length}. Em đọc cho anh nhé.`;
@@ -702,6 +733,8 @@ async function beginReading() {
 
 function pause() {
   state.playing = false;
+  clearRetryWait();
+  waitTries = 0;
   cancelSay();
   if (current) current.pause();
   if (window.speechSynthesis) speechSynthesis.cancel();
@@ -1044,7 +1077,7 @@ async function submitPaste() {
   const value = $("#pasteText").value;
   if (!value.trim()) { $("#pasteText").focus(); return; }
   const kind = detectPasteKind(value);
-  const label = { url: "link", path: "file", text: "văn bản" }[kind];
+  const label = { url: "link", path: "file/thư mục", text: "văn bản" }[kind];
   const ok = await importWith(label, () => api("import", {
     body: { kind, value: kind === "text" ? value : value.trim().replace(/^"(.*)"$/, "$1"), title: $("#pasteTitleInput").value },
   }));
@@ -1240,7 +1273,7 @@ function bindEvents() {
   $("#btnPasteGo").addEventListener("click", submitPaste);
   $("#pasteText").addEventListener("input", () => {
     const value = $("#pasteText").value;
-    $("#pasteHint").textContent = value.trim() ? { url: "Nhận ra: link web", path: "Nhận ra: đường dẫn file trên máy", text: `Văn bản, ${value.trim().length.toLocaleString("vi-VN")} ký tự` }[detectPasteKind(value)] : "";
+    $("#pasteHint").textContent = value.trim() ? { url: "Nhận ra: link web", path: "Nhận ra: đường dẫn file hoặc thư mục trên máy", text: `Văn bản, ${value.trim().length.toLocaleString("vi-VN")} ký tự` }[detectPasteKind(value)] : "";
   });
   $("#pasteText").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submitPaste(); } });
   $$("[data-close]").forEach((b) => b.addEventListener("click", () => { $("#pasteModal").hidden = true; }));

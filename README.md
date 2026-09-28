@@ -12,6 +12,21 @@ và chế độ trò chuyện bằng giọng nói với trợ lý AI.
 
 Tên cũ: Vietnamese Voice Mic. Từ bản 2.0.0 đổi tên thành VoiNoi.
 
+## Có gì mới ở 2.0.1 (đọc đủ, đọc cả trang)
+
+- **Đọc cả trang web:** không bôi đen gì, `Alt + click` trên trang rồi chọn "Đọc". App lấy link của tab từ ô địa chỉ
+  (không bấm phím, trang giữ nguyên), tải phần bài viết chính và đọc, bỏ menu, mục lục, chân trang. Trang cần đăng nhập
+  thì tự dùng chữ đang hiện trên trang, bỏ các dòng menu ngắn.
+- **Giữ nguyên đoạn bôi đen:** trước đây cú `Alt + click` lọt xuống trang và làm mất vùng bôi đen, nên "Đọc" đọc nhầm nội
+  dung cũ trong clipboard. Giờ `Alt + click` không tới trang nữa. "Đọc" chỉ lấy đoạn copy trong 10 phút gần đây.
+  Tắt bằng `"block_alt_click_passthrough": false`.
+- **Đọc không sót:** dịch vụ giọng đọc Edge lúc trả về rỗng (`NoAudioReceived`), trước đây mất cả đoạn khoảng 9 câu mà
+  không báo. Giờ thử lại với tốc độ lệch 1 đến 2% (tai không nghe ra) và đọc lại từng câu nếu cả đoạn lỗi. Đo trên một
+  bài 107 đoạn: từ 3 đoạn mất còn 0.
+- **Trợ lý đọc:** mở được cả thư mục (đọc lần lượt mọi file tài liệu bên trong), link có dấu tiếng Việt, tài liệu rất dài
+  chuyển đoạn không bị khựng, mất mạng thì chờ rồi đọc tiếp đúng câu, PDF có trang ảnh thì báo đúng trang thiếu.
+- **Sửa lỗi:** Kaizen luôn báo thất bại khi chạy bằng Task Scheduler; đoạn chỉ có tiếng ồn bị Whisper tính là mất chữ.
+
 ## Có gì mới ở 2.0.0 (nhanh hơn, hết treo)
 
 Đo trên máy thật, từ log của app:
@@ -59,7 +74,8 @@ powershell -ExecutionPolicy Bypass -File .\install-shortcut.ps1
 ## Vòng tròn chọn chế độ
 
 - Gõ chữ: nói thành chữ vào ô đã chọn.
-- Đọc: bôi đen hoặc `Ctrl+C` đoạn cần nghe trước, trợ lý đọc to đoạn đó. Chưa copy gì thì mở cửa sổ Trợ lý đọc.
+- Đọc: bôi đen đoạn cần nghe thì đọc đoạn đó. Không bôi đen gì trên trình duyệt thì đọc cả bài của trang đang mở.
+  Ngoài trình duyệt thì đọc đoạn vừa `Ctrl+C` (trong 10 phút). Không có gì thì mở cửa sổ Trợ lý đọc.
 - Nói: trò chuyện với trợ lý AI bằng giọng nói.
 - Hủy: `Esc`, click ra ngoài, hoặc để yên 10 giây.
 - Tắt vòng tròn (`Alt + click` là gõ chữ ngay): `"enable_radial_menu": false` trong `voice-mic-settings.local.json`.
@@ -79,7 +95,8 @@ powershell -ExecutionPolicy Bypass -File .\install-shortcut.ps1
 Đọc to tài liệu, ghi chú, bài nghiên cứu bằng giọng tiếng Việt tự nhiên (Hoài My, Nam Minh).
 
 - Mở: chạy `Start Doc Reader.cmd`, hoặc kéo thả một file lên file này.
-- Đầu vào: txt, md, pdf có lớp chữ, docx, html, epub, link web, Google Docs công khai, nội dung vừa `Ctrl+C`.
+- Đầu vào: txt, md, pdf có lớp chữ, docx, html, epub, cả một thư mục, link web, Google Docs công khai, nội dung vừa `Ctrl+C`.
+- Giao việc từ dòng lệnh: `"Start Doc Reader.cmd" "E:\Sach\abc.pdf"` mở và đọc luôn.
 - Phím tắt: `Space` đọc hoặc dừng, mũi tên trái phải để qua câu, `N` ghi chú, `Q` đặt câu hỏi, `R` đọc lại câu.
 - Ghi chú lưu thành Markdown trong `reader-data/notes/`. Chạy local tại `http://127.0.0.1:8767`.
 - Cần Internet để tạo giọng đọc (`edge-tts`), âm thanh được cache trong `reader-data/tts-cache/`.

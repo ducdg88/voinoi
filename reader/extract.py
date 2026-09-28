@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import os
 import posixpath
 import re
 import urllib.parse
@@ -22,6 +23,7 @@ TEXT_EXTENSIONS = {".txt", ".text", ".log", ".csv", ".json", ".srt", ".vtt"}
 MARKDOWN_EXTENSIONS = {".md", ".markdown", ".mdx"}
 HTML_EXTENSIONS = {".html", ".htm", ".xhtml"}
 SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | MARKDOWN_EXTENSIONS | HTML_EXTENSIONS | {".pdf", ".docx", ".epub"}
+MAX_URL_BYTES = 40_000_000
 
 SENTENCE_END = ".!?…:;"
 # " - Ten trang" / " | Ten trang" o cuoi tieu de (gom ca gach ngang dai)
@@ -168,7 +170,7 @@ def blocks_from_markdown(text: str) -> list[Block]:
             cells = [strip_markdown_inline(c) for c in stripped.strip("|").split("|")]
             value = ", ".join(c for c in cells if c)
             if value:
-                blocks.append({"type": "li", "text": value})
+                blocks.append({"type": "p", "text": value})
             continue
         paragraph.append(stripped)
     flush()
@@ -316,20 +318,41 @@ def blocks_from_html(html: str, prefer_main: bool = True) -> tuple[str, list[Blo
 def blocks_from_pdf(data: bytes) -> list[Block]:
     try:
         from pypdf import PdfReader
+        from pypdf.errors import PdfReadError
     except ImportError as exc:  # pragma: no cover
         raise ExtractError("Thiếu thư viện pypdf. Chạy: .venv\\Scripts\\python.exe -m pip install pypdf") from exc
-    reader = PdfReader(io.BytesIO(data))
+    try:
+        reader = PdfReader(io.BytesIO(data))
+    except (PdfReadError, ValueError, OSError) as exc:
+        raise ExtractError("File PDF bị lỗi hoặc không đúng định dạng.") from exc
     lines: list[str] = []
-    for page in reader.pages:
+    empty_pages: list[int] = []
+
+    def flush_empty() -> None:
+        # bao trang anh ngay tai cho do, de nguoi nghe biet doan nay bi thieu
+        if not empty_pages:
+            return
+        pages = f"Trang {empty_pages[0]}" if len(empty_pages) == 1 else f"Từ trang {empty_pages[0]} đến {empty_pages[-1]}"
+        lines.extend(["", f"({pages} là ảnh, không có chữ để đọc.)", ""])
+        empty_pages.clear()
+
+    has_text = False
+    for number, page in enumerate(reader.pages, start=1):
         try:
-            lines.extend((page.extract_text() or "").split("\n"))
+            text = page.extract_text() or ""
         except Exception:
+            text = ""
+        if not text.strip():
+            empty_pages.append(number)
             continue
+        flush_empty()
+        has_text = True
+        lines.extend(text.split("\n"))
         lines.append("")
-    blocks = blocks_from_plain_text("\n".join(lines))
-    if not blocks:
+    if not has_text:
         raise ExtractError("PDF này không có lớp chữ (có thể là ảnh scan). Cần OCR trước khi đọc.")
-    return blocks
+    flush_empty()
+    return blocks_from_plain_text("\n".join(lines))
 
 
 W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -385,8 +408,8 @@ def blocks_from_docx(data: bytes) -> list[Block]:
                     cell_text = " ".join(b["text"] for p in cell.iter(W_NS + "p") if (b := _docx_paragraph(p)))
                     if cell_text:
                         cells.append(cell_text)
-                if cells:
-                    blocks.append({"type": "li", "text": ", ".join(cells)})
+                if cells:  # hang bang la noi dung chinh, khong bi bo khi tat doc gach dau dong
+                    blocks.append({"type": "p", "text": ", ".join(cells)})
     return blocks
 
 
@@ -446,9 +469,76 @@ def extract_bytes(data: bytes, filename: str) -> tuple[str, list[Block]]:
     return title_from_blocks(blocks, stem), blocks
 
 
+FOLDER_EXTENSIONS = MARKDOWN_EXTENSIONS | {".txt", ".text", ".pdf", ".docx", ".epub"}
+FOLDER_SKIP_DIRS = {"node_modules", "dist", "build", "out", "__pycache__", "venv", "env", "site-packages",
+                    "vendor", "coverage", "models", "tts-cache"}
+FOLDER_SKIP_FILES = {"requirements.txt", "requirements-dev.txt", "license", "license.txt", "license.md",
+                     "changelog.md", "robots.txt"}
+FOLDER_MAX_FILES = 300
+FOLDER_MAX_CHARS = 3_000_000
+FOLDER_MAX_TEXT_BYTES = 8_000_000  # file qua lon can mo rieng de khong treo trinh duyet
+
+
+def _folder_files(folder: Path) -> list[Path]:
+    files: list[Path] = []
+    for current, dirs, names in os.walk(folder):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d.lower() not in FOLDER_SKIP_DIRS)
+        for name in names:
+            path = Path(current) / name
+            ext = path.suffix.lower()
+            if ext not in FOLDER_EXTENSIONS or name.lower() in FOLDER_SKIP_FILES or name.startswith("."):
+                continue
+            files.append(path)
+    # README/tong quan len dau, sau do theo duong dan
+    def order(path: Path) -> tuple:
+        rel = path.relative_to(folder)
+        return (len(rel.parts), 0 if path.stem.lower() in ("readme", "index", "huong-dan") else 1, str(rel).lower())
+    return sorted(files, key=order)
+
+
+def extract_folder(folder: Path) -> tuple[str, list[Block]]:
+    """Doc toan bo tai lieu trong mot thu muc (bo qua code, node_modules, thu muc an...)."""
+    files = _folder_files(folder)
+    if not files:
+        raise ExtractError(f"Thư mục không có tài liệu đọc được ({', '.join(sorted(FOLDER_EXTENSIONS))}).")
+    blocks: list[Block] = []
+    chars = 0
+    read = 0
+    skipped: list[str] = []
+    for path in files:
+        relative = str(path.relative_to(folder))
+        if read >= FOLDER_MAX_FILES or chars >= FOLDER_MAX_CHARS:
+            skipped.append(relative)
+            continue
+        try:
+            if path.suffix.lower() not in (".pdf", ".docx", ".epub") and path.stat().st_size > FOLDER_MAX_TEXT_BYTES:
+                skipped.append(relative)
+                continue
+            _, file_blocks = extract_bytes(path.read_bytes(), path.name)
+        except (ExtractError, OSError):
+            skipped.append(relative)
+            continue
+        if not file_blocks:
+            skipped.append(relative)
+            continue
+        blocks.append({"type": "h1", "text": relative.replace("\\", " / ")})
+        blocks.extend(file_blocks)
+        chars += sum(len(b["text"]) for b in file_blocks)
+        read += 1
+    if not blocks:
+        raise ExtractError("Không đọc được file nào trong thư mục này.")
+    if skipped:
+        blocks.append({"type": "p", "text": f"Còn {len(skipped)} file chưa đọc (file lỗi, quá lớn hoặc vượt giới hạn thư mục): "
+                       + ", ".join(skipped[:10]) + (" và các file khác" if len(skipped) > 10 else "")})
+    return f"Thư mục {folder.name or folder}", blocks
+
+
 def extract_path(path: str) -> tuple[str, list[Block], str]:
     cleaned = path.strip().strip('"').strip("'")
     file_path = Path(cleaned).expanduser()
+    if file_path.is_dir():
+        title, blocks = extract_folder(file_path)
+        return title, blocks, str(file_path.resolve())
     if not file_path.is_file():
         raise ExtractError(f"Không tìm thấy file: {cleaned}")
     title, blocks = extract_bytes(file_path.read_bytes(), file_path.name)
@@ -459,6 +549,13 @@ def normalize_url(url: str) -> str:
     url = url.strip()
     if not re.match(r"^https?://", url, flags=re.IGNORECASE):
         url = "https://" + url
+    # link co dau tieng Viet (vd .../wiki/Hà_Nội) lam urllib loi UnicodeEncodeError: ma hoa phan duong dan
+    parts = urllib.parse.urlsplit(url)
+    url = urllib.parse.urlunsplit((
+        parts.scheme, parts.netloc.encode("idna").decode("ascii") if not parts.netloc.isascii() else parts.netloc,
+        urllib.parse.quote(parts.path, safe="/%:@!$&'()*+,;=~-._"),
+        urllib.parse.quote(parts.query, safe="=&%/:+,;@!$'()*~-._?"), parts.fragment,
+    ))
     google_doc = re.match(r"https://docs\.google\.com/document/d/([\w-]+)", url)
     if google_doc:
         return f"https://docs.google.com/document/d/{google_doc.group(1)}/export?format=txt"
@@ -471,9 +568,13 @@ def extract_url(url: str) -> tuple[str, list[Block], str]:
     request = urllib.request.Request(fetch_url, headers={"User-Agent": USER_AGENT, "Accept-Language": "vi,en;q=0.8"})
     try:
         with urllib.request.urlopen(request, timeout=25) as response:
-            data = response.read(40_000_000)
+            data = response.read(MAX_URL_BYTES + 1)
+            if len(data) > MAX_URL_BYTES:
+                raise ExtractError("Nội dung link vượt 40 MB. Hãy tải file về máy rồi mở trực tiếp để tránh đọc thiếu.")
             content_type = response.headers.get("Content-Type", "")
             charset = response.headers.get_content_charset()
+    except ExtractError:
+        raise
     except Exception as exc:
         raise ExtractError(f"Không tải được link ({type(exc).__name__}: {exc}).") from exc
     path_name = Path(urllib.parse.urlparse(fetch_url).path).name or "trang-web"

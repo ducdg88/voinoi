@@ -29,15 +29,19 @@ def already_running(port: int) -> bool:
         return False
 
 
+# giao viec "doc tai lieu nay" tu dong lenh: khong ai bam nut nen phai cho phep tu phat tieng
+AUTOPLAY = "--autoplay-policy=no-user-gesture-required"
+
+
 def open_ui(url: str, mode: str) -> None:
     if mode == "app":
         for candidate in BROWSER_CANDIDATES:
             if Path(candidate).exists():
-                subprocess.Popen([candidate, f"--app={url}", "--window-size=1320,880"])
+                subprocess.Popen([candidate, f"--app={url}", "--window-size=1320,880", AUTOPLAY])
                 return
         found = shutil.which("chrome") or shutil.which("msedge")
         if found:
-            subprocess.Popen([found, f"--app={url}"])
+            subprocess.Popen([found, f"--app={url}", AUTOPLAY])
             return
     webbrowser.open(url)
 

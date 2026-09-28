@@ -728,6 +728,7 @@ class ReadAloud:
         self.rate = str(settings.get("voice_read_rate") or "+0%")
         self.sentences = [s for s in (clean_spoken(x) for x in sentences) if re.search(r"\w", s)]
         self.groups = self._group(self.sentences)
+        self.skipped = 0
         self.index = 0
         self.active = True
         self.paused = False
@@ -739,20 +740,43 @@ class ReadAloud:
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="read-tts")
         self._futures: dict[int, concurrent.futures.Future] = {}
 
-    @staticmethod
-    def _group(sentences: list[str]) -> list[str]:
+    def _group(self, sentences: list[str]) -> list[str]:
         groups: list[str] = []
+        self.group_sentences: list[list[str]] = []  # giu lai tung cau de doan loi thi doc lai tung cau
         current: list[str] = []
         for sentence in sentences:
             # doan dau ngan de co tieng nhanh, cac doan sau gop lien
             limit = 120 if not groups else READ_GROUP_CHARS
             if current and sum(len(s) for s in current) + len(sentence) > limit:
                 groups.append(" ".join(current))
+                self.group_sentences.append(current)
                 current = []
             current.append(sentence)
         if current:
             groups.append(" ".join(current))
+            self.group_sentences.append(current)
         return groups
+
+    def _speak_group_by_sentence(self, index: int) -> None:
+        """Doan loi (dich vu giong doc tra ve rong hoac mang chap chon): doc tung cau, chi bo dung cau hong."""
+        for sentence in self.group_sentences[index]:
+            if not self.active or self.paused:
+                return
+            path = None
+            for attempt in range(2):
+                try:
+                    path = tts.synthesize_to_file(sentence, self.voice, True, self.rate)
+                    break
+                except Exception as exc:
+                    self.log(f"read aloud sentence retry {attempt + 1} | {type(exc).__name__}: {exc} | text={sentence[:120]}")
+                    if self.stop_event.wait(2.0):
+                        return
+            if path is None:
+                self.skipped += 1
+                self.log(f"read aloud skipped sentence | text={sentence[:200]}")
+                continue
+            self.stop_event.clear()
+            play_mp3(path, self.stop_event)
 
     def _future(self, index: int) -> concurrent.futures.Future:
         if index not in self._futures:
@@ -779,8 +803,12 @@ class ReadAloud:
                 try:
                     path = current.result(timeout=90)
                 except Exception as exc:
-                    self.log(f"read aloud tts error: {type(exc).__name__}: {exc}")
-                    self.index += 1
+                    # truoc day bo qua ca doan khong bao, nen tai lieu dai bi doc thieu
+                    self.log(f"read aloud tts error, reading sentence by sentence | group={self.index} | {type(exc).__name__}: {exc}")
+                    self._futures.pop(self.index, None)
+                    self._speak_group_by_sentence(self.index)
+                    if self.active and not self.paused:
+                        self.index += 1
                     continue
                 if not self.active or self.paused:
                     continue
@@ -793,7 +821,7 @@ class ReadAloud:
             self.active = False
             self._pool.shutdown(wait=False, cancel_futures=True)
             if finished:
-                self.log("read aloud finished")
+                self.log(f"read aloud finished | groups={len(self.groups)} | skipped_sentences={self.skipped}")
             self.on_end()
 
     def pause(self) -> None:

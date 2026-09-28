@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """VoiNoi (Voi Noi): noi tieng Viet thanh chu vao dung o dang chon, doc to tai lieu, tro chuyen bang giong noi."""
 
 from __future__ import annotations
@@ -60,8 +60,8 @@ LAST_TRANSCRIPT_FILE = APP_DIR / "voice-last.txt"
 TRANSCRIPT_HISTORY_FILE = APP_DIR / "voice-transcripts.jsonl"
 LAST_AUDIO_FILE = APP_DIR / "voice-last.wav"
 APP_TITLE = "VoiNoi"
-APP_VERSION = "2.0.0"
-APP_BUILD = "voinoi-2026-09-26"
+APP_VERSION = "2.0.1"
+APP_BUILD = "voinoi-2026-09-28"
 SIZE = 38
 CORE = 26
 HUD_WIDTH = 220
@@ -189,7 +189,7 @@ RADIAL_FRAME_MS = 16
 # (ma, nhan, dong phu, goc bat dau Tk: do, nguoc chieu kim dong ho tinh tu huong 3 gio)
 RADIAL_OPTIONS = (
     ("dictation", "Gõ chữ", "voice to text", 45),
-    ("reader", "Đọc", "đoạn đã copy", 135),
+    ("reader", "Đọc", "bôi đen / cả trang", 135),
     ("cancel", "Huỷ", "", 225),
     ("chat", "Nói", "trò chuyện", 315),
 )
@@ -553,6 +553,7 @@ def save_last_audio(audio: sr.AudioData, metadata: dict[str, object] | None = No
         log(f"last audio save error: {type(exc).__name__}: {exc}")
 
 
+CLIPBOARD_FRESH_SECONDS = 600  # "Doc" chi lay doan copy trong 10 phut gan day, cu hon thi bao boi den lai
 LAST_OWN_CLIPBOARD_SEQ = [0]  # so thu tu clipboard luc Voice Mic tu dat transcript vao (de khong doc nham)
 
 
@@ -595,6 +596,91 @@ def restore_clipboard_later(text: str) -> None:
 
 def reader_import_clipboard() -> dict:
     """Dua noi dung clipboard (chu, link hoac duong dan file) vao Tro ly doc; tu bat may chu neu chua chay."""
+    return reader_import({"kind": "clipboard"})
+
+
+BROWSER_EXES = {"chrome.exe", "msedge.exe", "brave.exe", "firefox.exe", "opera.exe", "vivaldi.exe", "browser.exe"}
+_k32 = ctypes.WinDLL("kernel32", use_last_error=True)  # ban rieng de khai bao kieu handle 64-bit
+_k32.OpenProcess.restype = wintypes.HANDLE
+_k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+_k32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                            ctypes.POINTER(wintypes.DWORD)]
+_k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+
+def window_exe(hwnd: int) -> str:
+    """Ten file chuong trinh cua cua so (chrome.exe...), rong neu khong doc duoc."""
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    handle = _k32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return ""
+    try:
+        buffer = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(1024)
+        if _k32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return Path(buffer.value).name.lower()
+        return ""
+    finally:
+        _k32.CloseHandle(handle)
+
+
+def browser_url_uia(hwnd: int, timeout: float = 3.0) -> str:
+    """Doc link cua tab dang mo tu o dia chi bang UI Automation: khong bam phim nao, trang giu nguyen
+    (cach cu Ctrl+A/Ctrl+L to xanh ca trang va nhay o dia chi). Cua so la co the treo UIA rat lau
+    (do 28/09: 21-60 giay) nen chay trong luong rieng, qua timeout thi bo."""
+    result: list[str] = []
+
+    def worker() -> None:
+        try:
+            import comtypes
+            comtypes.CoInitialize()
+            from pywinauto.uia_defines import IUIA
+            uia = IUIA()
+            root = uia.iuia.ElementFromHandle(hwnd)
+            cond = uia.iuia.CreatePropertyCondition(uia.UIA_dll.UIA_ControlTypePropertyId,
+                                                    uia.UIA_dll.UIA_EditControlTypeId)
+            edit = root.FindFirst(uia.tree_scope["descendants"], cond)
+            if edit:
+                pattern = edit.GetCurrentPattern(uia.UIA_dll.UIA_ValuePatternId)
+                if pattern:
+                    result.append(str(pattern.QueryInterface(uia.UIA_dll.IUIAutomationValuePattern).CurrentValue or ""))
+        except Exception as exc:
+            log(f"read aloud uia url failed | {type(exc).__name__}: {exc}")
+
+    thread = threading.Thread(target=worker, daemon=True, name="uia-url")
+    thread.start()
+    thread.join(timeout)
+    value = result[0].strip() if result else ""
+    # o dia chi Chrome an "https://": chap nhan dang ten mien, bo qua chu tim kiem co dau cach
+    if value and " " not in value and re.match(r"^(https?://)?[\w.-]+\.[a-z]{2,}(:\d+)?([/?#]\S*)?$", value, re.I):
+        return value if value.lower().startswith("http") else "https://" + value
+    return ""
+
+
+def main_text_only(text: str) -> str:
+    """Chu lay bang Ctrl+A gom ca menu, nut, muc luc: bo cac dong ngan kieu nhan dieu huong."""
+    kept = []
+    for line in text.replace("\r\n", "\n").split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            kept.append("")
+            continue
+        words = len(stripped.split())
+        if words <= 3 and not re.search(r"[.!?:;…]$", stripped):
+            continue  # "Talks", "Sign in", "Jump to", "01"...
+        kept.append(stripped)
+    return "\n".join(kept)
+
+
+def window_title(hwnd: int) -> str:
+    length = user32.GetWindowTextLengthW(hwnd)
+    buffer = ctypes.create_unicode_buffer(length + 1)
+    user32.GetWindowTextW(hwnd, buffer, length + 1)
+    return buffer.value
+
+
+def reader_import(payload: dict) -> dict:
     try:
         reader_request("ping", timeout=1.5)
     except Exception:
@@ -612,7 +698,7 @@ def reader_import_clipboard() -> dict:
                 if time.monotonic() > deadline:
                     raise
     try:
-        return reader_request("import", {"kind": "clipboard"}, timeout=40)
+        return reader_request("import", payload, timeout=40)
     except urllib.error.HTTPError as exc:
         try:
             message = json.loads(exc.read().decode("utf-8")).get("error") or str(exc)
@@ -1017,6 +1103,90 @@ def left_button_down() -> bool:
 
 def key_down(vk: int) -> bool:
     return bool(user32.GetAsyncKeyState(vk) & 0x8000)
+
+
+# ---------------------------------------------------------------- chan Alt+click
+# Truoc day app chi "nhin" chuot (GetAsyncKeyState) nen cu Alt+click van lot xuong trang web ben duoi:
+# click do bo mat vung anh boi den, bam "Doc" thi Ctrl+C khong con gi de copy va app doc nham
+# noi dung cu trong clipboard (28/09). Moc chuot cap thap nuot Alt+click de trang giu nguyen vung boi den.
+WH_MOUSE_LL = 14
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP = 0x0202
+LLMHF_INJECTED = 0x01
+VK_MENU_MASK = 0xE8  # phim khong dung: chen vao de nha Alt khong mo menu cua Chrome/Office
+LRESULT = ctypes.c_ssize_t
+HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+
+
+class MSLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [("pt", wintypes.POINT), ("mouseData", wintypes.DWORD), ("flags", wintypes.DWORD),
+                ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+user32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD]
+user32.SetWindowsHookExW.restype = wintypes.HHOOK
+user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+user32.CallNextHookEx.restype = LRESULT
+_get_module_handle = ctypes.WinDLL("kernel32", use_last_error=True).GetModuleHandleW  # ban rieng: handle 64-bit
+_get_module_handle.argtypes = [wintypes.LPCWSTR]
+_get_module_handle.restype = wintypes.HMODULE
+
+
+class AltClickGuard:
+    """Nuot Alt+click trai (chi click that, khong phai click app tu gia lap) de khong lot xuong cua so duoi."""
+
+    def __init__(self) -> None:
+        self.enabled = False
+        self.holding = False  # dang giu chuot sau mot Alt+click da nuot
+        self.presses = 0      # dem so lan nuot, de vong theo doi chuot khong bo sot click qua nhanh
+        self._proc = HOOKPROC(self._callback)
+        self._hook = None
+
+    def start(self) -> None:
+        threading.Thread(target=self._run, name="alt-click-guard", daemon=True).start()
+
+    def _run(self) -> None:
+        self._hook = user32.SetWindowsHookExW(WH_MOUSE_LL, self._proc, _get_module_handle(None), 0)
+        if not self._hook:
+            log(f"alt-click guard: hook failed | error={ctypes.get_last_error()}")
+            return
+        log("alt-click guard: on")
+        msg = wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+
+    def _callback(self, code: int, wparam: int, lparam: int) -> int:
+        try:
+            if code == 0 and self.enabled:
+                info = ctypes.cast(lparam, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
+                if not info.flags & LLMHF_INJECTED:
+                    if wparam == WM_LBUTTONDOWN and key_down(VK_MENU):
+                        self.holding = True
+                        self.presses += 1
+                        keybd(VK_MENU_MASK)
+                        keybd(VK_MENU_MASK, KEYEVENTF_KEYUP)
+                        return 1
+                    if wparam == WM_LBUTTONUP and self.holding:
+                        self.holding = False
+                        return 1
+        except Exception:
+            pass
+        return user32.CallNextHookEx(None, code, wparam, lparam)
+
+
+ALT_CLICK_GUARD = AltClickGuard()
+
+
+def wait_alt_released(timeout: float = 1.0) -> None:
+    """Gui Ctrl+C khi Alt con giu se thanh Ctrl+Alt+C: doi anh nha Alt, qua lau thi che Alt bang phim rong."""
+    deadline = time.monotonic() + timeout
+    while key_down(VK_MENU) and time.monotonic() < deadline:
+        time.sleep(0.03)
+    if key_down(VK_MENU):
+        keybd(VK_MENU_MASK)
+        keybd(VK_MENU_MASK, KEYEVENTF_KEYUP)
+        keybd(VK_MENU, KEYEVENTF_KEYUP)
 
 
 HOTKEY_KEY_CODES = {"ctrl": VK_CONTROL, "control": VK_CONTROL, "alt": VK_MENU, "shift": 0x10,
@@ -2356,6 +2526,13 @@ class MicIconApp:
             self.root.withdraw()
         self.update_hud_position()
         self.monitor_target_window()
+        # chi can khi co vong tron: che do cu (khong vong tron) can cu click toi khung nhap
+        ALT_CLICK_GUARD.enabled = bool(self.settings_value("block_alt_click_passthrough", True)) and bool(
+            self.settings_value("enable_radial_menu", True))
+        self.clipboard_seq_seen = clipboard_sequence()
+        self.clipboard_changed_at = 0.0  # chua thay doi tu luc mo app: noi dung cu, khong tu doc
+        if ALT_CLICK_GUARD.enabled:
+            ALT_CLICK_GUARD.start()
         self.monitor_global_clicks()
         self.monitor_voice_hotkeys()
         self.keep_topmost()
@@ -2492,7 +2669,16 @@ class MicIconApp:
 
     def monitor_global_clicks(self) -> None:
         try:
-            down = left_button_down()
+            # Alt+click da bi moc chuot nuot thi Windows khong ghi nhan nut dang nhan: lay tu moc chuot
+            down = left_button_down() or ALT_CLICK_GUARD.holding
+            presses = ALT_CLICK_GUARD.presses
+            if presses != getattr(self, "guard_presses_seen", presses) and not down and not self.auto_was_down:
+                down = True  # click nhanh hon mot nhip theo doi: coi nhu vua nhan, nhip sau la tha
+            self.guard_presses_seen = presses
+            seq = clipboard_sequence()
+            if seq != self.clipboard_seq_seen:
+                self.clipboard_seq_seen = seq
+                self.clipboard_changed_at = time.monotonic()
             pressed = down and not self.auto_was_down
             released = self.auto_was_down and not down
             point = cursor_position()
@@ -2715,6 +2901,15 @@ class MicIconApp:
         if not hwnd or hwnd in {self.app_hwnd, self.hud_hwnd, self.particle_hwnd, self.radial_hwnd}:
             log(f"radial dictation ignored: no target window | point={point}")
             return
+        if ALT_CLICK_GUARD.enabled:
+            # Alt+click da bi nuot (de giu vung boi den cho "Doc"): click lai dung cho do de dat con tro
+            # vao khung nhap nhu truoc. An vong tron ngay, khong thi click trung chinh vong tron.
+            self.radial.withdraw()
+            wait_alt_released(0.6)
+            current = cursor_position()
+            focus_locked_target(hwnd, point)
+            user32.SetCursorPos(current[0], current[1])
+            log(f"radial dictation: replayed click to focus field | point={point}")
         self.begin_alt_click_listen(hwnd, point, "radial")
 
     def animate(self) -> None:
@@ -3428,6 +3623,11 @@ class MicIconApp:
             return "", "unavailable"
         try:
             text = self._transcribe_whisper(chunk_audio, vad=True).strip()
+        except sr.UnknownValueError:
+            # ca Google lan Whisper (co loc VAD) deu khong nghe thay loi: doan tieng on, khong phai mat chu.
+            # Truoc day tinh la loi -> ghi am dai nhieu tieng on bi do tin cay 11% va nghe lai ca bai.
+            log(f"whisper chunk {index}/{total} no speech | level={level} | speech_level={speech_level}")
+            return "", "quiet"
         except Exception as exc:
             log(f"whisper chunk {index}/{total} failed | {type(exc).__name__}: {exc}")
             return "", "failed"
@@ -4371,24 +4571,90 @@ class MicIconApp:
             self.show_hud("done", "Đã huỷ", 700)
 
     # ------------------------------------------------------------ "Doc": doc to doan anh boi den / vua copy
-    def grab_text_for_reading(self, target_hwnd: int) -> bool:
-        """Lay doan anh boi den (gui Ctrl+C) hoac doan anh vua copy. Tra ve True neu clipboard co noi dung cua anh."""
+    @staticmethod
+    def _ctrl_key(vk: int, wait_change: bool = True) -> bool:
+        """Gui Ctrl+<phim>; wait_change: doi toi 0.6 giay xem clipboard co doi khong."""
         before = clipboard_sequence()
-        if target_hwnd and window_exists(target_hwnd) and foreground_window() == target_hwnd:
-            keybd(VK_CONTROL)
-            keybd(VK_C)
-            keybd(VK_C, KEYEVENTF_KEYUP)
-            keybd(VK_CONTROL, KEYEVENTF_KEYUP)
-            for _ in range(8):
-                time.sleep(0.05)
-                if clipboard_sequence() != before:
-                    break
-        now = clipboard_sequence()
-        if now != before:
+        keybd(VK_CONTROL)
+        keybd(vk)
+        keybd(vk, KEYEVENTF_KEYUP)
+        keybd(VK_CONTROL, KEYEVENTF_KEYUP)
+        if not wait_change:
+            time.sleep(0.12)
+            return False
+        for _ in range(12):
+            time.sleep(0.05)
+            if clipboard_sequence() != before:
+                return True
+        return False
+
+    def grab_selection(self, target_hwnd: int) -> bool:
+        """Doan anh dang boi den (gui Ctrl+C). True neu co chu."""
+        if not (target_hwnd and window_exists(target_hwnd) and foreground_window() == target_hwnd):
+            return False
+        wait_alt_released()
+        if self._ctrl_key(VK_C) and get_clipboard_text().strip():
             log("read aloud source: selection")
-            return bool(get_clipboard_text().strip())
+            return True
+        return False
+
+    def grab_whole_page(self, target_hwnd: int) -> dict | None:
+        """Khong boi den gi tren trinh duyet = doc ca trang. Lay link cua tab (Ctrl+L, Ctrl+C) de Tro ly doc
+        tai phan bai viet sach (bo menu, muc luc, chan trang). Trang can dang nhap hoac chi hien chu bang
+        JavaScript thi tai ve se thieu: luc do dung chu cua ca trang (Ctrl+A, Ctrl+C) lay truoc lam du phong."""
+        if not (target_hwnd and window_exists(target_hwnd) and foreground_window() == target_hwnd):
+            return None
+        if window_exe(target_hwnd) not in BROWSER_EXES:
+            return None
+        title = re.sub(r"\s+[-|]\s+(Google Chrome|Microsoft​? Edge|Mozilla Firefox|Brave|Opera|Vivaldi|Cốc Cốc)$",
+                       "", window_title(target_hwnd)).strip()
+        if "Trợ lý đọc" in title:
+            return None
+        saved = get_clipboard_text()
+        page_focused = True
+        url = browser_url_uia(target_hwnd)  # khong bam phim, trang giu nguyen
+        if not url:
+            # du phong: Ctrl+L / Ctrl+C (o dia chi nhay len mot chut)
+            self._ctrl_key(0x4C, wait_change=False)
+            url = get_clipboard_text().strip() if self._ctrl_key(VK_C) else ""
+            user32.keybd_event(VK_ESCAPE, 0, 0, 0)
+            user32.keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0)
+            page_focused = False
+        log(f"read aloud page | url={url[:120]} | title={title[:60]}")
+        try:
+            if re.match(r"^https?://\S+$", url):
+                try:
+                    doc = reader_import({"kind": "url", "value": url})
+                    chars = sum(len(s["t"]) for s in doc.get("sentences", []))
+                    if chars >= 300:  # it hon thi thuong la trang dang nhap / trang chi hien chu bang JavaScript
+                        log(f"read aloud source: page url | chars={chars}")
+                        return doc
+                    log(f"read aloud page url too short | chars={chars}")
+                except Exception as exc:
+                    log(f"read aloud page url failed | {type(exc).__name__}: {exc}")
+            if not page_focused:
+                return None  # con tro dang o o dia chi, Ctrl+A se chon link chu khong phai trang
+            # link khong tai duoc: dung chu dang hien tren trang, bo dong menu/nut ngan
+            self._ctrl_key(0x41, wait_change=False)
+            page_text = get_clipboard_text() if self._ctrl_key(VK_C) else ""
+            page_text = main_text_only(page_text)
+            if len(page_text.strip()) >= 20:
+                log(f"read aloud source: page text | chars={len(page_text)}")
+                return reader_import({"kind": "text", "value": page_text, "title": title})
+            return None
+        finally:
+            if saved and set_clipboard_text_retry(saved):  # tra lai clipboard cua anh
+                LAST_OWN_CLIPBOARD_SEQ[0] = clipboard_sequence()
+
+    def fresh_clipboard(self) -> bool:
+        now = clipboard_sequence()
         if now != LAST_OWN_CLIPBOARD_SEQ[0] and get_clipboard_text().strip():
-            log("read aloud source: clipboard")
+            age = time.monotonic() - getattr(self, "clipboard_changed_at", 0.0)
+            if age > CLIPBOARD_FRESH_SECONDS:
+                # truoc day doc luon noi dung cu tu lau trong clipboard (vd "\Start") ma khong bao
+                log(f"read aloud: clipboard too old ({age:.0f}s), not reading it")
+                return False
+            log(f"read aloud source: clipboard | age={age:.0f}s")
             return True
         return False
 
@@ -4397,13 +4663,23 @@ class MicIconApp:
             self.root.after(0, lambda: self.show_hud(state, message, ms))
 
         try:
-            if not self.grab_text_for_reading(target_hwnd):
-                hud("error", "Bôi đen hoặc copy đoạn cần nghe trước", 2600)
-                log("read aloud: nothing selected or copied; opening doc reader")
-                self.root.after(2700, self.open_doc_reader)  # mo Tro ly doc de anh dan hoac keo file vao
-                return
-            hud("busy", "Đang chuẩn bị đọc...", None)
-            doc = reader_import_clipboard()
+            # thu tu: doan boi den > ca trang web dang mo > doan vua copy (10 phut) > mo Tro ly doc
+            if self.grab_selection(target_hwnd):
+                hud("busy", "Đang chuẩn bị đọc...", None)
+                doc = reader_import_clipboard()
+            else:
+                doc = None
+                if window_exe(target_hwnd) in BROWSER_EXES:
+                    hud("busy", "Không bôi đen: đọc cả trang...", None)
+                    doc = self.grab_whole_page(target_hwnd)
+                if doc is None:
+                    if not self.fresh_clipboard():
+                        hud("error", "Bôi đen đoạn cần nghe, hoặc mở trang web rồi bấm Đọc", 2600)
+                        log("read aloud: nothing selected or copied; opening doc reader")
+                        self.root.after(2700, self.open_doc_reader)  # mo Tro ly doc de anh dan hoac keo file vao
+                        return
+                    hud("busy", "Đang chuẩn bị đọc...", None)
+                    doc = reader_import_clipboard()
         except Exception as exc:
             log(f"read aloud prepare error: {type(exc).__name__}: {exc}")
             reason = str(exc) if isinstance(exc, RuntimeError) and str(exc) else "thử lại"
