@@ -1,3 +1,5 @@
+**🇻🇳 Tiếng Việt** · [🇬🇧 English](README.en.md)
+
 <p align="center"><img src="assets/voinoi.png" width="160" alt="VoiNoi"></p>
 
 # VoiNoi (Voi Nói)
@@ -167,4 +169,4 @@ Bản `.exe` không đóng gói Whisper để gọn nhẹ. Repo `ducdg88/voinoi`
 
 ---
 
-Made by [DUCPT](https://ducpt.com/?utm_source=github&utm_medium=readme&utm_campaign=voinoi) — AI agents, automation and digital products for one-person businesses. This tool: https://ducpt.com/bai-viet/vietnamese-voice-mic-coding-bang-giong-noi/?utm_source=github&utm_medium=readme&utm_campaign=voinoi
+Made by [DUCPT](https://ducpt.com/?utm_source=github&utm_medium=readme&utm_campaign=voinoi): AI agents, automation and digital products for one-person businesses. This tool: https://ducpt.com/bai-viet/vietnamese-voice-mic-coding-bang-giong-noi/?utm_source=github&utm_medium=readme&utm_campaign=voinoi
