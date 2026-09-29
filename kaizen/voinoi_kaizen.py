@@ -563,6 +563,20 @@ def improved(history: list[dict], goal: str) -> bool:
     return b < a if goal == "down" else b > a
 
 
+SHARED_DICT_SCRIPT = Path.home() / ".claude" / "skills" / "hieu-giong-noi" / "scripts" / "nhan_tu_voinoi.py"
+
+
+def share_learned() -> str:
+    """Dua luat vua hoc ve tu dien giong noi dung chung (skill hieu-giong-noi) neu may co skill do,
+    de Claude va cac app khac cung sua duoc cung tu, khong chi VoiNoi."""
+    if not SHARED_DICT_SCRIPT.exists():
+        return "tu-dien-chung: bo qua (may khong co skill hieu-giong-noi)"
+    out = subprocess.run([sys.executable, str(SHARED_DICT_SCRIPT), "--ap-dung"], capture_output=True,
+                         text=True, encoding="utf-8", errors="replace", timeout=120)
+    first = (out.stdout.strip().splitlines() or ["(khong co dau ra)"])[0]
+    return f"tu-dien-chung: {first}" if out.returncode == 0 else f"tu-dien-chung LOI: {out.stderr.strip()[:200]}"
+
+
 def act(findings: list[dict], m: dict, state: dict, report_path: Path, dry: bool) -> list[str]:
     actions: list[str] = []
     today = now().strftime("%Y-%m-%d")
@@ -572,6 +586,8 @@ def act(findings: list[dict], m: dict, state: dict, report_path: Path, dry: bool
     for item in learned:
         actions.append(f"hoc-tu: '{item['from']}' -> '{item['to']}' (gap {item['seen']} lan)")
     state.setdefault("learned", []).extend({**x, "date": today} for x in learned)
+    if learned and not dry:
+        actions.append(share_learned())
 
     ticket_sent = False
     for f in findings:
